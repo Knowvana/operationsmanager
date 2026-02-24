@@ -9,18 +9,17 @@
 // Settings is rendered INLINE using the shared SettingsConfig component
 // (not as a modal). Logs has its own dedicated viewer page.
 // ============================================================================
-import React, { useState, useEffect, useMemo } from 'react';
-import { AppShell, Card, PageHeader, EmptyState, Button, Logger, SettingsConfig } from '@shared';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { AppShell, Card, PageHeader, EmptyState, Button, Logger, SettingsConfig, PlatformService, ProgressModal, SuccessModal, ErrorModal, ConfirmationModal } from '@shared';
 import {
   LayoutDashboard, Users, Building2, Settings,
   Activity, Shield, Database, CheckCircle2,
   ScrollText, Save, HardDrive, RefreshCw, ExternalLink,
-  Server, Wifi, WifiOff, Clock, BarChart3, AlertTriangle,
-  Cpu, HardDrive as HDD, FileText, Layers, ArrowUpRight,
-  TrendingUp, Zap, Package, CircleDot
+  Clock, BarChart3, AlertTriangle, Layers, Zap
 } from 'lucide-react';
 import DatabaseSetupWizard from './setup/DatabaseSetupWizard';
 import LogsViewer from './views/LogsViewer';
+import TenantManagement from './views/TenantManagement';
 import firebaseConfig from '@config/firebase.json';
 import databaseSchema from '@config/database-schema.json';
 import appConfig from '@config/app.json';
@@ -39,7 +38,46 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
   const [activeView, setActiveView] = useState('overview');
   const [isSetupWizardOpen, setIsSetupWizardOpen] = useState(false);
 
-  // --- Database Config State (editable) ---
+  // --- Dynamic stats from Firestore ---
+  // NOTE: dbState is the single source of truth for database status.
+  //   'unknown'         = haven't checked yet (initial)
+  //   'not_initialized' = Firebase reachable but no platform docs exist
+  //   'empty'           = platform doc exists but collections are empty
+  //   'initialized'     = platform doc exists and collections have data
+  // isDatabaseReady (prop) = App.jsx's check; dbState = our own deeper check.
+  // We derive "is Firebase reachable" from whether dbState !== 'unknown'.
+  const [dbStats, setDbStats] = useState({ adminCount: 0, tenantCount: 0, logCount: 0, configCount: 0 });
+  const [dbStatsLoading, setDbStatsLoading] = useState(true); // true initially — we load on mount
+  const [dbState, setDbState] = useState('unknown');
+
+  // Derived: Firebase is reachable if we successfully queried state at least once
+  const firebaseReachable = dbState !== 'unknown';
+  // Derived: DB has data (initialized with documents)
+  const dbInitialized = dbState === 'initialized';
+
+  // --- Config update state ---
+  const [isUpdatingConfig, setIsUpdatingConfig] = useState(false);
+  const [configUpdateProgress, setConfigUpdateProgress] = useState(0);
+  const [showConfigSuccess, setShowConfigSuccess] = useState(false);
+  const [showConfigError, setShowConfigError] = useState(false);
+  const [configErrorMessage, setConfigErrorMessage] = useState('');
+
+
+  // --- Database deletion state ---
+  const [showWipeConfirmation, setShowWipeConfirmation] = useState(false);
+  const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
+  const [isDeletingDatabase, setIsDeletingDatabase] = useState(false);
+  const [deletionProgress, setDeletionProgress] = useState(0);
+  const [showDeletionSuccess, setShowDeletionSuccess] = useState(false);
+  const [deletionSuccessMessage, setDeletionSuccessMessage] = useState('');
+  const [showDeletionError, setShowDeletionError] = useState(false);
+  const [deletionErrorMessage, setDeletionErrorMessage] = useState('');
+
+  // --- Refresh state ---
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshProgress, setRefreshProgress] = useState(0);
+
+  // --- Database Config State (editable) — MUST be before handleSaveDbConfig callback ---
   const [dbConfig, setDbConfig] = useState({
     rootCollection: databaseSchema.root_collection,
     rootDocument: databaseSchema.root_document,
@@ -51,7 +89,6 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
       fieldCount: Object.keys(col.fields).length,
     })),
   });
-  const [dbConfigSaved, setDbConfigSaved] = useState(false);
 
   // --- Logging Config State ---
   const [logConfig, setLogConfig] = useState(() => Logger.getConfig());
@@ -60,31 +97,193 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
   );
   const [logConfigSaved, setLogConfigSaved] = useState(false);
 
+  // =========================================================================
+  // Helper: Unified database state label (single source — used everywhere)
+  // =========================================================================
+  const getDbStateLabel = (state) => {
+    switch (state) {
+      case 'initialized':     return 'Initialized';
+      case 'empty':           return 'Database Created — Empty';
+      case 'not_initialized': return 'Pending Initialization';
+      default:                return 'Checking…';
+    }
+  };
+
+  // =========================================================================
+  // loadDatabaseStats — fetches DB stats + state from Firestore.
+  // Called on mount (always, with progress), on isDatabaseReady change,
+  // and on manual Refresh. Shows a ProgressModal with minimum 1.5s display.
+  // =========================================================================
+  const loadDatabaseStats = useCallback(async (showProgress = true) => {
+    const startTime = Date.now();
+    if (showProgress) {
+      setIsRefreshing(true);
+      setRefreshProgress(10);
+    }
+    setDbStatsLoading(true);
+    try {
+      if (showProgress) setRefreshProgress(30);
+      const [stats, state] = await Promise.all([
+        PlatformService.getDatabaseStats(),
+        PlatformService.getDatabaseState(),
+      ]);
+      if (showProgress) setRefreshProgress(80);
+      console.log('[PlatformDashboard] Stats loaded:', stats, 'state:', state);
+      setDbStats(stats);
+      setDbState(state);
+      if (showProgress) setRefreshProgress(100);
+      Logger.info('Overview', 'Database stats loaded', { ...stats, state });
+    } catch (err) {
+      console.error('[PlatformDashboard] Error loading stats:', err);
+      Logger.error('Overview', 'Failed to load database stats', { error: err.message });
+    } finally {
+      setDbStatsLoading(false);
+      if (showProgress) {
+        // Keep modal visible for at least 1.5s so user always sees feedback
+        const elapsed = Date.now() - startTime;
+        const remaining = Math.max(1500 - elapsed, 300);
+        setTimeout(() => {
+          setIsRefreshing(false);
+          setRefreshProgress(0);
+        }, remaining);
+      }
+    }
+  }, []);
+
+  // Always load stats on mount with progress modal
+  useEffect(() => {
+    loadDatabaseStats(true);
+  }, [loadDatabaseStats]);
+
+  // Reload stats when isDatabaseReady flips to true (after setup wizard completes)
+  useEffect(() => {
+    if (isDatabaseReady) {
+      loadDatabaseStats(false);
+    }
+  }, [isDatabaseReady, loadDatabaseStats]);
+
+  // --- Config Update Handler ---
+  const handleSaveDbConfig = useCallback(async () => {
+    setIsUpdatingConfig(true);
+    setConfigUpdateProgress(0);
+    setShowConfigError(false);
+    try {
+      // Simulate progress
+      setConfigUpdateProgress(30);
+      
+      console.log('[PlatformDashboard] Saving database config:', {
+        rootCollection: dbConfig.rootCollection,
+        rootDocument: dbConfig.rootDocument,
+        firestoreUrl: dbConfig.firestoreUrl,
+        collections: dbConfig.collections,
+      });
+      
+      // Update database config in Firestore
+      await PlatformService.updateSystemConfig('database', {
+        rootCollection: dbConfig.rootCollection,
+        rootDocument: dbConfig.rootDocument,
+        firestoreUrl: dbConfig.firestoreUrl,
+        collections: dbConfig.collections,
+      });
+      
+      setConfigUpdateProgress(70);
+      
+      console.log('[PlatformDashboard] Database config saved, updating logging config...');
+      
+      // Update logging config if needed
+      await PlatformService.updateSystemConfig('logging', {
+        minLevel: Logger.getConfig().minLevel,
+        maxBufferSize: Logger.getConfig().maxBufferSize,
+        consoleOutput: Logger.getConfig().consoleOutput,
+      });
+      
+      setConfigUpdateProgress(100);
+      setIsUpdatingConfig(false);
+      setShowConfigSuccess(true);
+      Logger.info('Settings', 'Configuration updated successfully', { dbConfig });
+      console.log('[PlatformDashboard] Configuration saved successfully');
+    } catch (err) {
+      setIsUpdatingConfig(false);
+      const errorMsg = err?.message || 'An unknown error occurred while updating configuration';
+      setConfigErrorMessage(errorMsg);
+      setShowConfigError(true);
+      Logger.error('Settings', 'Failed to update configuration', { error: errorMsg });
+      console.error('[PlatformDashboard] Error saving config:', err);
+    }
+  }, [dbConfig]);
+
   const handleDatabaseSetupComplete = () => {
     setIsSetupWizardOpen(false);
     onDatabaseReady?.();
     Logger.info('Platform', 'Database setup completed');
   };
 
-  const handleSaveDbConfig = () => {
-    Logger.info('Settings', 'Database configuration saved', dbConfig);
-    setDbConfigSaved(true);
-    setTimeout(() => setDbConfigSaved(false), 2000);
-  };
+  // --- Database Deletion Handlers ---
+  const handleWipeDatabase = useCallback(async () => {
+    setShowWipeConfirmation(false);
+    setIsDeletingDatabase(true);
+    setDeletionProgress(0);
+    setShowDeletionError(false);
+    try {
+      console.log('[PlatformDashboard] Starting database wipe...');
+      setDeletionProgress(25);
+      
+      const result = await PlatformService.wipeAllCollections();
+      
+      setDeletionProgress(100);
+      setIsDeletingDatabase(false);
+      setDeletionSuccessMessage(`Successfully wiped ${result.deletedCount} documents from database`);
+      setShowDeletionSuccess(true);
+      Logger.info('Settings', 'Database wiped successfully', { deletedCount: result.deletedCount });
+      console.log('[PlatformDashboard] Database wipe completed:', result);
+      
+      // Reload stats after deletion
+      setTimeout(() => loadDatabaseStats(), 1000);
+    } catch (err) {
+      setIsDeletingDatabase(false);
+      const errorMsg = err?.message || 'Failed to wipe database';
+      setDeletionErrorMessage(errorMsg);
+      setShowDeletionError(true);
+      Logger.error('Settings', 'Failed to wipe database', { error: errorMsg });
+      console.error('[PlatformDashboard] Error wiping database:', err);
+    }
+  }, [loadDatabaseStats]);
+
+  const handleDeleteDatabase = useCallback(async () => {
+    setShowDeleteConfirmation(false);
+    setIsDeletingDatabase(true);
+    setDeletionProgress(0);
+    setShowDeletionError(false);
+    try {
+      console.log('[PlatformDashboard] Starting complete database deletion...');
+      setDeletionProgress(25);
+      
+      const result = await PlatformService.deleteAllCollections();
+      
+      setDeletionProgress(100);
+      setIsDeletingDatabase(false);
+      setDeletionSuccessMessage(`Successfully deleted ${result.deletedCount} documents. Database is now empty.`);
+      setShowDeletionSuccess(true);
+      Logger.info('Settings', 'Database deleted successfully', { deletedCount: result.deletedCount });
+      console.log('[PlatformDashboard] Database deletion completed:', result);
+      
+      // Reload stats after deletion
+      setTimeout(() => loadDatabaseStats(), 1000);
+    } catch (err) {
+      setIsDeletingDatabase(false);
+      const errorMsg = err?.message || 'Failed to delete database';
+      setDeletionErrorMessage(errorMsg);
+      setShowDeletionError(true);
+      Logger.error('Settings', 'Failed to delete database', { error: errorMsg });
+      console.error('[PlatformDashboard] Error deleting database:', err);
+    }
+  }, [loadDatabaseStats]);
 
   const handleSaveLogConfig = () => {
     Logger.updateConfig(logConfig);
     Logger.info('Settings', 'Logging configuration saved', { ...logConfig, storagePath: logStoragePath });
     setLogConfigSaved(true);
     setTimeout(() => setLogConfigSaved(false), 2000);
-  };
-
-  const updateCollectionPath = (index, newPath) => {
-    setDbConfig((prev) => {
-      const cols = [...prev.collections];
-      cols[index] = { ...cols[index], path: newPath };
-      return { ...prev, collections: cols };
-    });
   };
 
   // Log navigation
@@ -98,17 +297,7 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
         return renderOverview();
 
       case 'tenants':
-        return (
-          <div className="animate-fade-in">
-            <PageHeader title="Tenant Management" subtitle="Manage organizations and subscriptions" icon={Building2} />
-            <EmptyState
-              icon={<Building2 size={40} className="text-surface-300" />}
-              title="No tenants yet"
-              description="Create your first tenant to start onboarding organizations."
-              action={<Button icon={<Building2 size={16} />}>Create Tenant</Button>}
-            />
-          </div>
-        );
+        return <TenantManagement isDatabaseReady={isDatabaseReady} />;
 
       case 'users':
         return (
@@ -170,7 +359,7 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
 
   // --- Overview ---
 
-  // Computed stats for overview
+  // Computed stats for overview (in-memory logs)
   const logStats = useMemo(() => {
     const logs = Logger.getSystemLogs();
     const apiLogs = Logger.getApiLogs();
@@ -178,155 +367,208 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
     const warnings = logs.filter((l) => l.level === 'warn').length;
     const last5 = logs.slice(0, 5);
     return { total: logs.length, apiTotal: apiLogs.length, errors, warnings, last5 };
-  }, [activeView]); // recalculate when navigating back to overview
+  }, [activeView]);
 
-  const collectionCount = Object.keys(databaseSchema.collections).length;
-  const moduleCollectionCount = Object.keys(databaseSchema.module_collections || {}).length;
-  const totalFields = Object.values(databaseSchema.collections).reduce(
-    (sum, col) => sum + Object.keys(col.fields).length, 0
-  );
+  const schemaInfo = useMemo(() => PlatformService.getSchemaInfo(), []);
+
+  // Dynamic checklist — derived from real-time state.
+  // "Database Created" = Firebase is reachable (Firestore project exists and responds).
+  // "Database Initialized" = system_admins has at least 1 doc (isDatabaseInitialized check).
+  const checklist = useMemo(() => [
+    { label: 'Firebase Connected', done: firebaseReachable },
+    { label: 'Database Created', done: firebaseReachable },
+    { label: 'Database Initialized', done: dbInitialized },
+    { label: 'Admin Account Created', done: dbStats.adminCount > 0 },
+    { label: 'Logging Active', done: dbStats.logCount > 0 || dbStats.configCount > 0 },
+    { label: 'First Tenant Created', done: dbStats.tenantCount > 0 },
+    { label: 'Users Onboarded', done: false },
+    { label: 'Module Subscriptions', done: false },
+  ], [firebaseReachable, dbInitialized, dbStats, dbState]);
+
+  const checklistDone = checklist.filter((c) => c.done).length;
 
   function renderOverview() {
     return (
-      <div className="space-y-6 animate-fade-in">
+      <div className="space-y-0 animate-fade-in">
         <PageHeader
           title="Platform Overview"
           subtitle={`Welcome back, ${user?.displayName || 'Administrator'}`}
           icon={LayoutDashboard}
         />
 
-        {/* Row 1: Key Metrics */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* ─── Row 1: Key Metrics ─── */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
           <StatCard
             icon={<Zap size={20} className="text-emerald-500" />}
             label="System Health"
-            value="Operational"
-            gradient="from-emerald-50 to-teal-50"
-            detail="All services running"
+            value={firebaseReachable ? 'Operational' : (dbStatsLoading ? 'Checking…' : 'Degraded')}
+            gradient={firebaseReachable ? 'from-emerald-50 to-teal-50' : 'from-amber-50 to-orange-50'}
+            detail={firebaseReachable ? (dbInitialized ? 'All services running' : 'Firebase connected · DB needs setup') : (dbStatsLoading ? 'Connecting to Firebase…' : 'Cannot reach Firebase')}
+            glow={firebaseReachable ? 'shadow-emerald-100/60' : 'shadow-amber-100/60'}
+            borderGradient={firebaseReachable ? 'from-emerald-300 to-teal-300' : 'from-amber-300 to-orange-300'}
           />
           <StatCard
             icon={<Database size={20} className="text-brand-500" />}
             label="Database"
-            value={isDatabaseReady ? 'Connected' : 'Not Setup'}
-            gradient={isDatabaseReady ? 'from-brand-50 to-blue-50' : 'from-amber-50 to-orange-50'}
-            detail={isDatabaseReady ? firebaseConfig.projectId : 'Run Setup Wizard'}
+            value={dbInitialized ? 'Ready' : (firebaseReachable ? 'Not Ready' : 'Checking…')}
+            gradient={dbInitialized ? 'from-brand-50 to-blue-50' : 'from-amber-50 to-orange-50'}
+            detail={getDbStateLabel(dbState)}
+            glow={dbInitialized ? 'shadow-brand-100/60' : 'shadow-amber-100/60'}
+            borderGradient={dbInitialized ? 'from-brand-300 to-blue-300' : 'from-amber-300 to-orange-300'}
+            actionButton={
+              dbState === 'empty' ? (
+                <Button variant="primary" size="xs" onClick={() => setIsSetupWizardOpen(true)}>
+                  Import Data
+                </Button>
+              ) : dbState === 'not_initialized' ? (
+                <Button variant="primary" size="xs" onClick={() => setIsSetupWizardOpen(true)}>
+                  Initialize
+                </Button>
+              ) : null
+            }
           />
           <StatCard
-            icon={<Package size={20} className="text-violet-500" />}
-            label="Total Modules"
-            value="2"
+            icon={<Building2 size={20} className="text-violet-500" />}
+            label="Tenants"
+            value={dbStatsLoading ? '...' : String(dbStats.tenantCount)}
             gradient="from-violet-50 to-purple-50"
-            detail="1 active, 1 coming soon"
+            detail={dbStats.tenantCount === 0 ? 'Create your first tenant' : `${dbStats.tenantCount} active`}
+            glow="shadow-violet-100/60"
+            borderGradient="from-violet-300 to-purple-300"
           />
           <StatCard
             icon={<ScrollText size={20} className="text-amber-500" />}
             label="Log Entries"
-            value={String(logStats.total)}
+            value={dbStatsLoading ? '...' : String(dbStats.logCount)}
             gradient="from-amber-50 to-orange-50"
-            detail={`${logStats.errors} errors, ${logStats.warnings} warnings`}
+            detail={dbStats.logCount === 0 ? 'No logs persisted yet' : `${dbStats.logCount} persisted to database`}
+            glow="shadow-amber-100/60"
+            borderGradient="from-amber-300 to-orange-300"
           />
         </div>
 
-        {/* Row 2: DB Objects + System Info */}
+        {/* ─── Gradient Separator ─── */}
+        <div className="py-6">
+          <div className="h-1 bg-gradient-to-r from-transparent via-brand-300/80 to-transparent rounded-full" />
+        </div>
+
+        {/* ─── Row 2: DB Objects + Config Status + Logging ─── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {/* Database Objects */}
-          <Card variant="elevated" className="p-5 col-span-1">
+          {/* Database Objects (dynamic) */}
+          <GlowCard>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold text-surface-700 flex items-center gap-2">
-                <HDD size={15} className="text-brand-500" />
+                <HardDrive size={15} className="text-brand-500" />
                 Database Objects
               </h3>
-              {isDatabaseReady && (
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600">CONNECTED</span>
-              )}
+              <div className="flex items-center gap-2">
+                {dbStatsLoading && <RefreshCw size={12} className="text-surface-300 animate-spin" />}
+                {firebaseReachable ? (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600">CONNECTED</span>
+                ) : (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-600">CHECKING</span>
+                )}
+              </div>
             </div>
             <div className="space-y-2.5">
-              <MiniStat label="Root Collection" value={databaseSchema.root_collection} mono />
-              <MiniStat label="Root Document" value={databaseSchema.root_document} mono />
-              <MiniStat label="Collections" value={String(collectionCount)} />
-              <MiniStat label="Total Fields" value={String(totalFields)} />
-              <MiniStat label="Module Collections" value={String(moduleCollectionCount)} />
+              <MiniStat label="Root Collection" value={schemaInfo.rootCollection} mono />
+              <MiniStat label="Root Document" value={schemaInfo.rootDocument} mono />
+              <MiniStat label="Collections" value={String(schemaInfo.collectionCount)} />
+              <MiniStat label="Total Fields" value={String(schemaInfo.totalFields)} />
+              <MiniStat label="Module Collections" value={String(schemaInfo.moduleCollectionCount)} />
+              <div className="h-px bg-gradient-to-r from-transparent via-surface-200 to-transparent my-1" />
+              <MiniStat label="Admins (DB)" value={dbStatsLoading ? '...' : String(dbStats.adminCount)} />
+              <MiniStat label="Tenants (DB)" value={dbStatsLoading ? '...' : String(dbStats.tenantCount)} />
+              <MiniStat label="Logs (DB)" value={dbStatsLoading ? '...' : String(dbStats.logCount)} />
+              <MiniStat label="Config Docs (DB)" value={dbStatsLoading ? '...' : String(dbStats.configCount)} />
               <MiniStat label="Provider" value="Firebase Firestore" />
               <MiniStat label="Project ID" value={firebaseConfig.projectId || '—'} mono />
             </div>
-            {!isDatabaseReady && (
-              <Button
-                variant="primary"
-                size="sm"
-                className="w-full mt-4"
-                icon={<Database size={14} />}
-                onClick={() => setIsSetupWizardOpen(true)}
-              >
-                Run Setup Wizard
+            {!dbInitialized && (
+              <Button variant="primary" size="sm" className="mt-4" icon={<Database size={14} />} onClick={() => setIsSetupWizardOpen(true)}>
+                {dbState === 'empty' ? 'Import Default Data' : 'Run Setup Wizard'}
               </Button>
             )}
-          </Card>
+          </GlowCard>
 
-          {/* Platform Configuration Status */}
-          <Card variant="elevated" className="p-5 col-span-1">
+          {/* Configuration Status (dynamic) */}
+          <GlowCard>
             <h3 className="text-sm font-bold text-surface-700 mb-4 flex items-center gap-2">
-              <Settings size={15} className="text-brand-500" />
+              <Shield size={15} className="text-brand-500" />
               Configuration Status
             </h3>
             <div className="space-y-3">
-              <StatusRow label="Database Setup" done={isDatabaseReady} />
-              <StatusRow label="Firebase Connected" done={isDatabaseReady} />
-              <StatusRow label="Admin Account" done={true} />
-              <StatusRow label="Logging Active" done={true} />
-              <StatusRow label="First Tenant Created" done={false} />
-              <StatusRow label="Users Onboarded" done={false} />
-              <StatusRow label="Module Subscriptions" done={false} />
+              {checklist.map((item, i) => (
+                <StatusRow key={i} label={item.label} done={item.done} />
+              ))}
             </div>
             <div className="mt-4 pt-3 border-t border-surface-100">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] text-surface-400">Setup Progress</span>
-                <span className="text-xs font-bold text-brand-600">
-                  {[isDatabaseReady, isDatabaseReady, true, true, false, false, false].filter(Boolean).length}/7
-                </span>
+                <span className="text-xs font-bold text-brand-600">{checklistDone}/{checklist.length}</span>
               </div>
               <div className="w-full h-2 bg-surface-100 rounded-full mt-1.5 overflow-hidden">
                 <div
                   className="h-full bg-gradient-to-r from-brand-500 to-teal-500 rounded-full transition-all duration-500"
-                  style={{ width: `${([isDatabaseReady, isDatabaseReady, true, true, false, false, false].filter(Boolean).length / 7) * 100}%` }}
+                  style={{ width: `${(checklistDone / checklist.length) * 100}%` }}
                 />
               </div>
             </div>
-          </Card>
+          </GlowCard>
 
-          {/* Logging Overview */}
-          <Card variant="elevated" className="p-5 col-span-1">
+          {/* Logging Overview (Database + In-Memory) */}
+          <GlowCard>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold text-surface-700 flex items-center gap-2">
                 <BarChart3 size={15} className="text-brand-500" />
                 Logging Summary
               </h3>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">IN-MEMORY</span>
             </div>
-            <div className="space-y-2.5">
-              <MiniStat label="Total Logs" value={String(logStats.total)} />
-              <MiniStat label="API Calls Tracked" value={String(logStats.apiTotal)} />
-              <MiniStat label="Errors" value={String(logStats.errors)} valueColor={logStats.errors > 0 ? 'text-rose-600' : undefined} />
-              <MiniStat label="Warnings" value={String(logStats.warnings)} valueColor={logStats.warnings > 0 ? 'text-amber-600' : undefined} />
-              <MiniStat label="Flush Buffer" value={`${Logger.getFlushBufferSize()} pending`} />
-              <MiniStat label="Min Level" value={Logger.getConfig().minLevel} />
-              <MiniStat label="Session" value={Logger.getSessionId().substring(0, 16) + '...'} mono />
+            
+            {/* Database Logs */}
+            <div className="mb-4">
+              <p className="text-[10px] font-bold text-surface-600 mb-2 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-brand-500" />
+                Database Logs
+              </p>
+              <div className="space-y-2">
+                <MiniStat label="Persisted Logs" value={dbStatsLoading ? '...' : String(dbStats.logCount)} />
+                <MiniStat label="Status" value={dbStats.logCount > 0 ? 'Active' : 'No logs yet'} valueColor={dbStats.logCount > 0 ? 'text-emerald-600' : 'text-surface-400'} />
+              </div>
             </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              className="w-full mt-4"
-              icon={<ScrollText size={14} />}
-              onClick={() => setActiveView('logs')}
-            >
+
+            <div className="h-px bg-gradient-to-r from-transparent via-surface-200 to-transparent my-3" />
+
+            {/* In-Memory Logs */}
+            <div>
+              <p className="text-[10px] font-bold text-surface-600 mb-2 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-blue-500" />
+                In-Memory Logs
+              </p>
+              <div className="space-y-2">
+                <MiniStat label="Total Logs" value={String(logStats.total)} />
+                <MiniStat label="API Calls" value={String(logStats.apiTotal)} />
+                <MiniStat label="Errors" value={String(logStats.errors)} valueColor={logStats.errors > 0 ? 'text-rose-600' : undefined} />
+                <MiniStat label="Warnings" value={String(logStats.warnings)} valueColor={logStats.warnings > 0 ? 'text-amber-600' : undefined} />
+                <MiniStat label="Buffer" value={`${Logger.getFlushBufferSize()} pending`} />
+              </div>
+            </div>
+
+            <Button variant="primary" size="sm" className="w-full mt-4" icon={<ScrollText size={14} />} onClick={() => setActiveView('logs')}>
               View All Logs
             </Button>
-          </Card>
+          </GlowCard>
         </div>
 
-        {/* Row 3: Recent Activity + Platform Info */}
+        {/* ─── Gradient Separator ─── */}
+        <div className="py-6">
+          <div className="h-1 bg-gradient-to-r from-transparent via-brand-300/80 to-transparent rounded-full" />
+        </div>
+
+        {/* ─── Row 3: Recent Activity + Platform Info ─── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Recent Activity */}
-          <Card variant="elevated" className="p-5">
+          <GlowCard>
             <h3 className="text-sm font-bold text-surface-700 mb-4 flex items-center gap-2">
               <Clock size={15} className="text-brand-500" />
               Recent Activity
@@ -363,10 +605,10 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
                 ))}
               </div>
             )}
-          </Card>
+          </GlowCard>
 
           {/* Platform Information */}
-          <Card variant="elevated" className="p-5">
+          <GlowCard>
             <h3 className="text-sm font-bold text-surface-700 mb-4 flex items-center gap-2">
               <Layers size={15} className="text-brand-500" />
               Platform Information
@@ -375,9 +617,12 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
               <MiniStat label="Platform" value={appConfig.appName || appName} />
               <MiniStat label="Version" value={appConfig.appVersion || '1.0.0'} mono />
               <MiniStat label="Environment" value="Development" />
+              <div className="h-px bg-gradient-to-r from-transparent via-surface-200 to-transparent my-1" />
               <MiniStat label="Framework" value="React 18 + Vite 5" />
               <MiniStat label="UI Library" value="Tailwind CSS 3" />
               <MiniStat label="Backend" value="Firebase 10" />
+              <div className="h-px bg-gradient-to-r from-transparent via-surface-200 to-transparent my-1" />
+              <MiniStat label="Total Modules" value={String(appConfig.availableModules?.length || 0)} />
               <MiniStat label="Logged In As" value={user?.email || '—'} mono />
               <MiniStat label="Role" value={user?.role?.replace('_', ' ') || '—'} />
             </div>
@@ -392,7 +637,7 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
                 Open Firestore Console
               </a>
             )}
-          </Card>
+          </GlowCard>
         </div>
       </div>
     );
@@ -410,63 +655,122 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
 
         {/* Connection Status */}
         <Card variant="flat" className="p-4">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 mb-3">Connection Status</h4>
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400">Connection Status</h4>
+            <Button
+              variant="primary"
+              size="xxs"
+              icon={<RefreshCw size={11} />}
+              onClick={() => loadDatabaseStats(true)}
+              disabled={isRefreshing}
+            >
+              {isRefreshing ? 'Refreshing…' : 'Refresh'}
+            </Button>
+          </div>
           <div className="space-y-2.5">
+            {/* Row: Firebase Connection (reachable or not) */}
             <SettingsRow
-              label="Status"
-              value={isDatabaseReady ? 'Connected' : 'Not configured'}
-              valueColor={isDatabaseReady ? 'text-emerald-600' : 'text-amber-600'}
+              label="Firebase Connection"
+              value={firebaseReachable ? 'Connected' : (dbStatsLoading ? 'Checking…' : 'Unreachable')}
+              valueColor={firebaseReachable ? 'text-emerald-600' : 'text-amber-600'}
             />
+            {/* Row: Database State (single action button based on state) */}
+            <div className="flex items-center justify-between py-1.5">
+              <span className="text-xs text-surface-500">Database State</span>
+              <div className="flex items-center gap-2">
+                <span className={`text-xs font-semibold ${
+                  dbState === 'initialized' ? 'text-emerald-600' :
+                  dbState === 'empty' ? 'text-amber-600' :
+                  'text-surface-500'
+                }`}>
+                  {getDbStateLabel(dbState)}
+                </span>
+                {(dbState === 'empty' || dbState === 'not_initialized') && (
+                  <Button
+                    variant="primary"
+                    size="xxs"
+                    onClick={() => setIsSetupWizardOpen(true)}
+                  >
+                    {dbState === 'empty' ? 'Import' : 'Initialize'}
+                  </Button>
+                )}
+              </div>
+            </div>
             <SettingsRow label="Provider" value="Firebase Firestore" />
             <SettingsRow label="Project ID" value={firebaseConfig.projectId || '—'} mono />
             <SettingsRow label="Auth Domain" value={firebaseConfig.authDomain || '—'} mono />
           </div>
         </Card>
 
-        {/* Editable Database Structure */}
+        {/* Database Configuration */}
         <Card variant="flat" className="p-4">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 mb-3">Database Structure</h4>
+          <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 mb-3">Database Configuration</h4>
           <div className="space-y-3">
-            <EditableField
+            <SettingsRow
               label="Root Collection"
               value={dbConfig.rootCollection}
-              onChange={(v) => setDbConfig((p) => ({ ...p, rootCollection: v }))}
+              mono
             />
-            <EditableField
-              label="Database Name (Root Document)"
+            <SettingsRow
+              label="Root Document"
               value={dbConfig.rootDocument}
-              onChange={(v) => setDbConfig((p) => ({ ...p, rootDocument: v }))}
-            />
-            <EditableField
-              label="Firestore Console URL"
-              value={dbConfig.firestoreUrl}
-              onChange={(v) => setDbConfig((p) => ({ ...p, firestoreUrl: v }))}
+              mono
             />
             <SettingsRow
               label="Document Path"
               value={`${dbConfig.rootCollection}/${dbConfig.rootDocument}`}
               mono
             />
+            <EditableField
+              label="Firestore Console URL"
+              value={dbConfig.firestoreUrl}
+              onChange={(v) => setDbConfig((p) => ({ ...p, firestoreUrl: v }))}
+            />
           </div>
         </Card>
 
-        {/* Editable Collections */}
+        {/* Database Policies */}
         <Card variant="flat" className="p-4">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 mb-3">Collections</h4>
+          <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 mb-3">Database Policies</h4>
           <div className="space-y-3">
-            {dbConfig.collections.map((col, idx) => (
+            <EditableField
+              label="Max Documents Per Collection"
+              value={dbConfig.maxDocsPerCollection || '10000'}
+              onChange={(v) => setDbConfig((p) => ({ ...p, maxDocsPerCollection: v }))}
+            />
+            <EditableField
+              label="Data Retention (days)"
+              value={dbConfig.dataRetentionDays || '90'}
+              onChange={(v) => setDbConfig((p) => ({ ...p, dataRetentionDays: v }))}
+            />
+            <EditableField
+              label="Backup Frequency (hours)"
+              value={dbConfig.backupFrequencyHours || '24'}
+              onChange={(v) => setDbConfig((p) => ({ ...p, backupFrequencyHours: v }))}
+            />
+            <ToggleRow
+              label="Enable Automatic Backups"
+              value={dbConfig.autoBackupEnabled !== false}
+              onChange={(v) => setDbConfig((p) => ({ ...p, autoBackupEnabled: v }))}
+            />
+          </div>
+        </Card>
+
+        {/* Collections (Read-Only) */}
+        <Card variant="flat" className="p-4">
+          <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 mb-3">Collections (Read-Only)</h4>
+          <p className="text-xs text-surface-500 mb-3">These are your actual Firestore collection names. They cannot be edited here.</p>
+          <div className="space-y-3">
+            {dbConfig.collections.map((col) => (
               <div key={col.key} className="flex items-center gap-3 py-2 border-b border-surface-50 last:border-0">
                 <div className="flex-1">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-[10px] font-mono text-surface-400 bg-surface-50 px-1.5 py-0.5 rounded">{col.key}</span>
                     <span className="text-[10px] text-surface-300">{col.fieldCount} fields</span>
                   </div>
-                  <input
-                    type="text"
-                    value={col.path}
-                    onChange={(e) => updateCollectionPath(idx, e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-sm border border-surface-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 focus:border-brand-400 transition-all font-mono"
-                  />
+                  <div className="px-2.5 py-1.5 text-sm border border-surface-200 rounded-lg bg-surface-50 font-mono text-surface-600">
+                    {col.path}
+                  </div>
                   <p className="text-[10px] text-surface-400 mt-1">{col.description}</p>
                 </div>
               </div>
@@ -474,23 +778,65 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
           </div>
         </Card>
 
-        {/* Actions */}
-        <div className="flex items-center gap-3 pt-2">
+
+        {/* Danger Zone — Database Operations */}
+        <Card variant="flat" className="p-4 border-rose-200 bg-rose-50/30 mt-6">
+          <h4 className="text-xs font-bold uppercase tracking-wider text-rose-600 mb-3">⚠️ Danger Zone</h4>
+          <p className="text-xs text-surface-600 mb-4">These actions cannot be undone. Use with caution.</p>
+          <div className="space-y-3">
+            {dbState === 'empty' && (
+              <div>
+                <h5 className="text-xs font-semibold text-surface-700 mb-2">Reinitialize Database</h5>
+                <p className="text-xs text-surface-500 mb-2">Restore default platform data (admins, config, etc.) to an empty database.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={<RefreshCw size={14} />}
+                  onClick={() => setIsSetupWizardOpen(true)}
+                >
+                  Reinitialize with Defaults
+                </Button>
+              </div>
+            )}
+            <div>
+              <h5 className="text-xs font-semibold text-surface-700 mb-2">Wipe Database</h5>
+              <p className="text-xs text-surface-500 mb-2">Delete all documents from all collections, but keep the collection structure intact.</p>
+              <Button
+                variant="danger"
+                size="sm"
+                icon={<RefreshCw size={14} />}
+                onClick={() => setShowWipeConfirmation(true)}
+                disabled={isDeletingDatabase}
+              >
+                Wipe All Data
+              </Button>
+            </div>
+            <div className="border-t border-surface-200 pt-3">
+              <h5 className="text-xs font-semibold text-surface-700 mb-2">Delete Database</h5>
+              <p className="text-xs text-surface-500 mb-2">Permanently delete all documents from all collections. Complete database reset.</p>
+              <Button
+                variant="danger"
+                size="sm"
+                icon={<AlertTriangle size={14} />}
+                onClick={() => setShowDeleteConfirmation(true)}
+                disabled={isDeletingDatabase}
+              >
+                Delete All Data
+              </Button>
+            </div>
+          </div>
+        </Card>
+
+        {/* Final Actions */}
+        <div className="flex items-center gap-3 pt-4 border-t border-surface-200">
           <Button
-            variant={dbConfigSaved ? 'success' : 'primary'}
+            variant="primary"
             size="sm"
-            icon={dbConfigSaved ? <CheckCircle2 size={14} /> : <Save size={14} />}
+            icon={<Save size={14} />}
             onClick={handleSaveDbConfig}
+            disabled={isUpdatingConfig}
           >
-            {dbConfigSaved ? 'Saved!' : 'Save Configuration'}
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={<Database size={14} />}
-            onClick={() => setIsSetupWizardOpen(true)}
-          >
-            {isDatabaseReady ? 'Reconfigure' : 'Run Setup Wizard'}
+            {isUpdatingConfig ? 'Saving...' : 'Save Configuration'}
           </Button>
           {dbConfig.firestoreUrl && (
             <a
@@ -680,22 +1026,121 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
         onClose={() => setIsSetupWizardOpen(false)}
         onComplete={handleDatabaseSetupComplete}
       />
+
+      {/* Config Update Progress Modal */}
+      <ProgressModal
+        isOpen={isUpdatingConfig}
+        title="Updating Configuration"
+        message="Saving changes to database..."
+        progress={configUpdateProgress}
+      />
+
+      {/* Config Update Success Modal */}
+      <SuccessModal
+        isOpen={showConfigSuccess}
+        title="Configuration Updated"
+        message="Your changes have been saved successfully to the database."
+        onClose={() => setShowConfigSuccess(false)}
+      />
+
+      {/* Config Update Error Modal */}
+      <ErrorModal
+        isOpen={showConfigError}
+        title="Configuration Failed"
+        message={configErrorMessage}
+        onClose={() => setShowConfigError(false)}
+      />
+
+      {/* Wipe Database Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={showWipeConfirmation}
+        title="Wipe Database"
+        message="This will delete all documents from all collections but keep the collection structure intact. This action cannot be undone."
+        confirmText="Wipe All Data"
+        cancelText="Cancel"
+        isDangerous={true}
+        onConfirm={handleWipeDatabase}
+        onCancel={() => setShowWipeConfirmation(false)}
+      />
+
+      {/* Delete Database Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={showDeleteConfirmation}
+        title="Delete All Database Data"
+        message="This will permanently delete all documents from all collections. Your database will be completely empty. This action cannot be undone."
+        confirmText="Delete All Data"
+        cancelText="Cancel"
+        isDangerous={true}
+        onConfirm={handleDeleteDatabase}
+        onCancel={() => setShowDeleteConfirmation(false)}
+      />
+
+      {/* Database Deletion Progress Modal */}
+      <ProgressModal
+        isOpen={isDeletingDatabase}
+        title="Deleting Database"
+        message="Removing all documents from database..."
+        progress={deletionProgress}
+      />
+
+      {/* Database Deletion Success Modal */}
+      <SuccessModal
+        isOpen={showDeletionSuccess}
+        title="Database Cleared"
+        message={deletionSuccessMessage}
+        onClose={() => setShowDeletionSuccess(false)}
+      />
+
+      {/* Database Deletion Error Modal */}
+      <ErrorModal
+        isOpen={showDeletionError}
+        title="Deletion Failed"
+        message={deletionErrorMessage}
+        onClose={() => setShowDeletionError(false)}
+      />
+
+      {/* Refresh Status Progress Modal */}
+      <ProgressModal
+        isOpen={isRefreshing}
+        title="Refreshing Status"
+        message="Checking database connection and state..."
+        progress={refreshProgress}
+      />
     </AppShell>
   );
 }
 
 // --- Local sub-components (only used in this file) ---
 
-function StatCard({ icon, label, value, gradient, detail }) {
+function StatCard({ icon, label, value, gradient, detail, glow = '', borderGradient = '', actionButton = null }) {
   return (
-    <Card variant="default" className={`p-5 bg-gradient-to-br ${gradient}`}>
-      <div className="flex items-center justify-between mb-3">
-        <div className="p-2 rounded-lg bg-white/80 shadow-sm">{icon}</div>
+    <div className={`relative rounded-xl overflow-hidden shadow-md ${glow}`}>
+      {/* Gradient left border accent */}
+      {borderGradient && (
+        <div className={`absolute left-0 top-0 bottom-0 w-1.5 bg-gradient-to-b ${borderGradient}`} />
+      )}
+      <div className={`p-4 pl-5 bg-gradient-to-br ${gradient} border border-surface-200/60 rounded-xl flex flex-col h-full`}>
+        <div className="flex items-center justify-between mb-3">
+          <div className="p-2 rounded-lg bg-white/80 shadow-sm">{icon}</div>
+        </div>
+        <p className="text-xl font-extrabold text-surface-800 mb-1">{value}</p>
+        <p className="text-xs font-semibold text-surface-600">{label}</p>
+        {detail && <p className="text-[10px] text-surface-500 mt-1 flex-grow">{detail}</p>}
+        {actionButton && <div className="mt-auto pt-2">{actionButton}</div>}
       </div>
-      <p className="text-2xl font-extrabold text-surface-800">{value}</p>
-      <p className="text-xs font-medium text-surface-500 mt-0.5">{label}</p>
-      {detail && <p className="text-[10px] text-surface-400 mt-1">{detail}</p>}
-    </Card>
+    </div>
+  );
+}
+
+function GlowCard({ children }) {
+  return (
+    <div className="relative rounded-xl overflow-hidden shadow-md shadow-surface-200/40 hover:shadow-lg hover:shadow-brand-100/30 transition-shadow duration-300">
+      {/* Gradient left border */}
+      <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-gradient-to-b from-brand-400 via-teal-400 to-emerald-400" />
+      <div className="bg-white border border-surface-200/60 rounded-xl p-6 pl-7">
+        {children}
+      </div>
+    </div>
   );
 }
 

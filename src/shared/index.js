@@ -20,6 +20,10 @@ export { default as StatusBadge } from './components/StatusBadge';
 export { default as EmptyState } from './components/EmptyState';
 export { default as LoginForm } from './components/LoginForm';
 export { default as SettingsConfig } from './components/SettingsConfig';
+export { default as ProgressModal } from './components/ProgressModal';
+export { default as SuccessModal } from './components/SuccessModal';
+export { default as ErrorModal } from './components/ErrorModal';
+export { default as ConfirmationModal } from './components/ConfirmationModal';
 
 // --- Layouts ---
 export { default as AppShell } from './layouts/AppShell';
@@ -31,6 +35,7 @@ export { default as RightPanel } from './layouts/RightPanel';
 // --- Services ---
 export { default as Logger } from './services/logger';
 export { default as AuthService } from './services/authService';
+export { default as PlatformService } from './services/platformService';
 
 // --- Hooks (added as we build them) ---
 // export { default as useConfirmAction } from './hooks/useConfirmAction';

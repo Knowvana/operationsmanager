@@ -29,6 +29,25 @@ const RESULT_CONFIG = {
   pending: { color: 'text-surface-400', bg: 'bg-surface-50' },
 };
 
+// Maps log source strings to user-friendly page/component names.
+// Add entries here as new components start logging.
+const SOURCE_TO_COMPONENT = {
+  'Overview':        'Dashboard',
+  'Navigation':      'Dashboard',
+  'Settings':        'Settings',
+  'Platform':        'Platform Setup',
+  'PlatformService': 'Platform Service',
+  'Auth':            'Authentication',
+  'Firebase':        'Firebase',
+  'API':             'API Layer',
+  'Logger':          'Logging Config',
+  'System':          'System',
+  'Tenants':         'Tenant Mgmt',
+  'Modules':         'Module Registry',
+  'Users':           'User Mgmt',
+  'Security':        'Security',
+};
+
 export default function LogsViewer() {
   const [activeTab, setActiveTab] = useState('system');
   const [logs, setLogs] = useState([]);
@@ -196,16 +215,16 @@ export default function LogsViewer() {
               <p className="text-sm font-medium">No {activeTab === 'system' ? 'logs' : 'API calls'} match your filters</p>
             </div>
           ) : activeTab === 'system' ? (
-            /* System Logs Table */
-            <table className="w-full text-xs">
+            <table className="w-full text-sm">
               <thead className="sticky top-0 bg-surface-50 z-10">
                 <tr className="border-b border-surface-200">
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-14">Level</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-20">Time</th>
+                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-16">Level</th>
+                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-24">Time</th>
+                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-24">Component</th>
                   <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-20">Source</th>
                   <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-28">User</th>
                   <th className="text-left px-3 py-2.5 font-semibold text-surface-500">Message</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-16">Result</th>
+                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-18">Result</th>
                 </tr>
               </thead>
               <tbody>
@@ -213,22 +232,27 @@ export default function LogsViewer() {
                   const lc = LEVEL_CONFIG[log.level] || LEVEL_CONFIG.info;
                   const rc = RESULT_CONFIG[log.result] || RESULT_CONFIG.pending;
                   const isSelected = selectedLog?.id === log.id;
+                  // Derive component name from source for user-friendly display
+                  const component = SOURCE_TO_COMPONENT[log.source] || log.source || '—';
                   return (
                     <tr key={log.id} onClick={() => setSelectedLog(isSelected ? null : log)}
                       className={`border-b border-surface-50 cursor-pointer transition-colors ${isSelected ? 'bg-brand-50/50' : 'hover:bg-surface-50'}`}>
                       <td className="px-3 py-2">
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${lc.bg} ${lc.color}`}>{lc.label}</span>
+                        <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-bold ${lc.bg} ${lc.color}`}>{lc.label}</span>
                       </td>
-                      <td className="px-3 py-2 font-mono text-surface-400 text-[10px]">
+                      <td className="px-3 py-2 font-mono text-surface-400 text-xs">
                         {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : '—'}
                       </td>
                       <td className="px-3 py-2">
-                        <span className="inline-block px-1.5 py-0.5 rounded bg-surface-100 text-surface-600 font-semibold text-[10px]">{log.source}</span>
+                        <span className="inline-block px-1.5 py-0.5 rounded bg-brand-50 text-brand-600 font-semibold text-xs">{component}</span>
                       </td>
-                      <td className="px-3 py-2 text-surface-500 truncate max-w-[120px] text-[10px]">{log.user || '—'}</td>
+                      <td className="px-3 py-2">
+                        <span className="inline-block px-1.5 py-0.5 rounded bg-surface-100 text-surface-600 font-semibold text-xs">{log.source}</span>
+                      </td>
+                      <td className="px-3 py-2 text-surface-500 truncate max-w-[140px] text-xs">{log.user || '—'}</td>
                       <td className="px-3 py-2 text-surface-700 truncate max-w-[300px]">{log.message}</td>
                       <td className="px-3 py-2">
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${rc.bg} ${rc.color}`}>{log.result || '—'}</span>
+                        <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-bold ${rc.bg} ${rc.color}`}>{log.result || '—'}</span>
                       </td>
                     </tr>
                   );
@@ -236,16 +260,17 @@ export default function LogsViewer() {
               </tbody>
             </table>
           ) : (
-            /* API Logs Table */
-            <table className="w-full text-xs">
+            /* API Logs Table — shows URL, Method, Status, Response Time, User, Result */
+            <table className="w-full text-sm">
               <thead className="sticky top-0 bg-surface-50 z-10">
                 <tr className="border-b border-surface-200">
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-16">Method</th>
+                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-18">Method</th>
                   <th className="text-left px-3 py-2.5 font-semibold text-surface-500">API URL</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-16">Status</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-16">Time</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-24">User</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-16">Result</th>
+                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-18">Status</th>
+                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-24">Resp Time</th>
+                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-24">Timestamp</th>
+                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-28">User</th>
+                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-18">Result</th>
                 </tr>
               </thead>
               <tbody>
@@ -256,7 +281,7 @@ export default function LogsViewer() {
                     <tr key={log.id} onClick={() => setSelectedLog(isSelected ? null : log)}
                       className={`border-b border-surface-50 cursor-pointer transition-colors ${isSelected ? 'bg-brand-50/50' : 'hover:bg-surface-50'}`}>
                       <td className="px-3 py-2">
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                        <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-bold ${
                           log.method === 'GET' ? 'bg-blue-50 text-blue-600' :
                           log.method === 'POST' ? 'bg-emerald-50 text-emerald-600' :
                           log.method === 'PUT' ? 'bg-amber-50 text-amber-600' :
@@ -264,18 +289,21 @@ export default function LogsViewer() {
                           'bg-surface-100 text-surface-500'
                         }`}>{log.method}</span>
                       </td>
-                      <td className="px-3 py-2 font-mono text-surface-600 truncate max-w-[300px] text-[10px]">{log.url}</td>
+                      <td className="px-3 py-2 font-mono text-surface-600 truncate max-w-[300px] text-xs">{log.url}</td>
                       <td className="px-3 py-2">
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${isSuccess ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
+                        <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-bold ${isSuccess ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
                           {log.statusCode}
                         </span>
                       </td>
-                      <td className="px-3 py-2 font-mono text-surface-400 text-[10px]">{log.durationMs}ms</td>
-                      <td className="px-3 py-2 text-surface-500 truncate max-w-[100px] text-[10px]">{log.user || '—'}</td>
+                      <td className="px-3 py-2 font-mono text-surface-500 text-xs">{log.durationMs}ms</td>
+                      <td className="px-3 py-2 font-mono text-surface-400 text-xs">
+                        {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : '—'}
+                      </td>
+                      <td className="px-3 py-2 text-surface-500 truncate max-w-[120px] text-xs">{log.user || '—'}</td>
                       <td className="px-3 py-2">
                         {isSuccess
-                          ? <CheckCircle2 size={14} className="text-emerald-500" />
-                          : <XCircle size={14} className="text-rose-500" />
+                          ? <CheckCircle2 size={15} className="text-emerald-500" />
+                          : <XCircle size={15} className="text-rose-500" />
                         }
                       </td>
                     </tr>
@@ -296,29 +324,34 @@ export default function LogsViewer() {
             <div className="p-4 space-y-3">
               {activeTab === 'system' ? (
                 <>
-                  <DetailRow icon={<Tag size={13} />} label="Level">
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${LEVEL_CONFIG[selectedLog.level]?.bg} ${LEVEL_CONFIG[selectedLog.level]?.color}`}>
+                  <DetailRow icon={<Tag size={14} />} label="Level">
+                    <span className={`px-1.5 py-0.5 rounded text-xs font-bold ${LEVEL_CONFIG[selectedLog.level]?.bg} ${LEVEL_CONFIG[selectedLog.level]?.color}`}>
                       {selectedLog.level?.toUpperCase()}
                     </span>
                   </DetailRow>
-                  <DetailRow icon={<Clock size={13} />} label="Time">
+                  <DetailRow icon={<Clock size={14} />} label="Time">
                     {selectedLog.timestamp ? new Date(selectedLog.timestamp).toLocaleString() : '—'}
                   </DetailRow>
-                  <DetailRow icon={<Tag size={13} />} label="Source">{selectedLog.source}</DetailRow>
-                  <DetailRow icon={<User size={13} />} label="User">{selectedLog.user || '—'}</DetailRow>
-                  <DetailRow icon={<CheckCircle2 size={13} />} label="Result">
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${RESULT_CONFIG[selectedLog.result]?.bg || ''} ${RESULT_CONFIG[selectedLog.result]?.color || ''}`}>
+                  <DetailRow icon={<Globe size={14} />} label="Component">
+                    <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-brand-50 text-brand-600">
+                      {SOURCE_TO_COMPONENT[selectedLog.source] || selectedLog.source}
+                    </span>
+                  </DetailRow>
+                  <DetailRow icon={<Tag size={14} />} label="Source">{selectedLog.source}</DetailRow>
+                  <DetailRow icon={<User size={14} />} label="User">{selectedLog.user || '—'}</DetailRow>
+                  <DetailRow icon={<CheckCircle2 size={14} />} label="Result">
+                    <span className={`px-1.5 py-0.5 rounded text-xs font-bold ${RESULT_CONFIG[selectedLog.result]?.bg || ''} ${RESULT_CONFIG[selectedLog.result]?.color || ''}`}>
                       {selectedLog.result || '—'}
                     </span>
                   </DetailRow>
                   <div>
-                    <p className="text-[10px] font-semibold text-surface-400 uppercase tracking-wider mb-1">Message</p>
-                    <p className="text-xs text-surface-700 bg-surface-50 rounded-lg p-3">{selectedLog.message}</p>
+                    <p className="text-xs font-semibold text-surface-400 uppercase tracking-wider mb-1">Message</p>
+                    <p className="text-sm text-surface-700 bg-surface-50 rounded-lg p-3">{selectedLog.message}</p>
                   </div>
                   {selectedLog.data && (
                     <div>
-                      <p className="text-[10px] font-semibold text-surface-400 uppercase tracking-wider mb-1">Data</p>
-                      <pre className="text-[11px] text-surface-600 bg-surface-50 rounded-lg p-3 overflow-x-auto font-mono whitespace-pre-wrap">
+                      <p className="text-xs font-semibold text-surface-400 uppercase tracking-wider mb-1">Data (JSON)</p>
+                      <pre className="text-xs text-surface-600 bg-surface-50 rounded-lg p-3 overflow-x-auto font-mono whitespace-pre-wrap">
                         {JSON.stringify(selectedLog.data, null, 2)}
                       </pre>
                     </div>
@@ -326,39 +359,40 @@ export default function LogsViewer() {
                 </>
               ) : (
                 <>
-                  <DetailRow icon={<ArrowRightLeft size={13} />} label="Method">
-                    <span className="font-bold">{selectedLog.method}</span>
+                  <DetailRow icon={<ArrowRightLeft size={14} />} label="Method">
+                    <span className="font-bold text-sm">{selectedLog.method}</span>
                   </DetailRow>
                   <div>
-                    <p className="text-[10px] font-semibold text-surface-400 uppercase tracking-wider mb-1">API URL</p>
-                    <p className="text-xs text-surface-700 bg-surface-50 rounded-lg p-3 font-mono break-all">{selectedLog.url}</p>
+                    <p className="text-xs font-semibold text-surface-400 uppercase tracking-wider mb-1">API URL</p>
+                    <p className="text-sm text-surface-700 bg-surface-50 rounded-lg p-3 font-mono break-all">{selectedLog.url}</p>
                   </div>
-                  <DetailRow icon={<Tag size={13} />} label="Status Code">
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${selectedLog.success ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
+                  <DetailRow icon={<Tag size={14} />} label="Response Code">
+                    <span className={`px-1.5 py-0.5 rounded text-xs font-bold ${selectedLog.success ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
                       {selectedLog.statusCode}
                     </span>
                   </DetailRow>
-                  <DetailRow icon={<Clock size={13} />} label="Response Time">{selectedLog.durationMs}ms</DetailRow>
-                  <DetailRow icon={<User size={13} />} label="User">{selectedLog.user || '—'}</DetailRow>
-                  <DetailRow icon={<Clock size={13} />} label="Timestamp">
+                  <DetailRow icon={<Clock size={14} />} label="Response Time">{selectedLog.durationMs}ms</DetailRow>
+                  <DetailRow icon={<CheckCircle2 size={14} />} label="Result">
+                    <span className={`px-1.5 py-0.5 rounded text-xs font-bold ${selectedLog.success ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
+                      {selectedLog.success ? 'Success' : 'Failure'}
+                    </span>
+                  </DetailRow>
+                  <DetailRow icon={<User size={14} />} label="User">{selectedLog.user || '—'}</DetailRow>
+                  <DetailRow icon={<Clock size={14} />} label="Timestamp">
                     {selectedLog.timestamp ? new Date(selectedLog.timestamp).toLocaleString() : '—'}
                   </DetailRow>
-                  {selectedLog.requestPayload && (
-                    <div>
-                      <p className="text-[10px] font-semibold text-surface-400 uppercase tracking-wider mb-1">Request Payload</p>
-                      <pre className="text-[11px] text-surface-600 bg-surface-50 rounded-lg p-3 overflow-x-auto font-mono whitespace-pre-wrap">
-                        {JSON.stringify(selectedLog.requestPayload, null, 2)}
-                      </pre>
-                    </div>
-                  )}
-                  {selectedLog.responsePayload && (
-                    <div>
-                      <p className="text-[10px] font-semibold text-surface-400 uppercase tracking-wider mb-1">Response Payload</p>
-                      <pre className="text-[11px] text-surface-600 bg-surface-50 rounded-lg p-3 overflow-x-auto font-mono whitespace-pre-wrap">
-                        {JSON.stringify(selectedLog.responsePayload, null, 2)}
-                      </pre>
-                    </div>
-                  )}
+                  <div>
+                    <p className="text-xs font-semibold text-surface-400 uppercase tracking-wider mb-1">Request Body (JSON)</p>
+                    <pre className="text-xs text-surface-600 bg-surface-50 rounded-lg p-3 overflow-x-auto font-mono whitespace-pre-wrap">
+                      {selectedLog.requestPayload ? JSON.stringify(selectedLog.requestPayload, null, 2) : 'No request body'}
+                    </pre>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-surface-400 uppercase tracking-wider mb-1">Response Body (JSON)</p>
+                    <pre className="text-xs text-surface-600 bg-surface-50 rounded-lg p-3 overflow-x-auto font-mono whitespace-pre-wrap">
+                      {selectedLog.responsePayload ? JSON.stringify(selectedLog.responsePayload, null, 2) : 'No response body'}
+                    </pre>
+                  </div>
                 </>
               )}
             </div>
@@ -374,9 +408,9 @@ function DetailRow({ icon, label, children }) {
     <div className="flex items-center justify-between">
       <div className="flex items-center gap-1.5 text-surface-400">
         {icon}
-        <span className="text-[10px] font-semibold uppercase tracking-wider">{label}</span>
+        <span className="text-xs font-semibold uppercase tracking-wider">{label}</span>
       </div>
-      <span className="text-xs font-medium text-surface-700">{children}</span>
+      <span className="text-sm font-medium text-surface-700">{children}</span>
     </div>
   );
 }

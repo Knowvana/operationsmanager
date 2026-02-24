@@ -18,8 +18,8 @@
 //   - Admin setup URL can be bookmarked / shared securely
 //   - Same LoginForm component, different auth handler + branding
 // ============================================================================
-import React, { useState, useCallback, useMemo } from 'react';
-import { Logger } from '@shared';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import { Logger, PlatformService } from '@shared';
 import SystemAdminLogin from './auth/SystemAdminLogin';
 import TenantLogin from './auth/TenantLogin';
 import PlatformDashboard from './PlatformDashboard';
@@ -29,6 +29,27 @@ export default function App() {
   // --- Application State ---
   const [user, setUser] = useState(null);
   const [isDatabaseReady, setIsDatabaseReady] = useState(false);
+
+  // Check if database is already initialized on app mount
+  useEffect(() => {
+    const checkDatabase = async () => {
+      try {
+        console.log('[App] Checking if database is initialized...');
+        const isInitialized = await PlatformService.isDatabaseInitialized();
+        console.log('[App] Database initialized check result:', isInitialized);
+        if (isInitialized) {
+          setIsDatabaseReady(true);
+          Logger.info('App', 'Database already initialized', { isInitialized: true });
+        } else {
+          Logger.info('App', 'Database not yet initialized', { isInitialized: false });
+        }
+      } catch (err) {
+        console.error('[App] Error checking database:', err);
+        Logger.error('App', 'Failed to check database status', { error: err.message });
+      }
+    };
+    checkDatabase();
+  }, []);
 
   // Determine login mode from URL path
   const isAdminSetupRoute = useMemo(() => {
