@@ -1,0 +1,24 @@
+{
+  "_schema": "DemoData — Sample seed data for testing. Contains 1 demo TenantAdmin user and 1 demo Tenant. Used by the Platform Admin to quickly populate the database with test objects.",
+
+  "demo_user": {
+    "email": "demo@knowvana.com",
+    "displayName": "Demo Admin",
+    "password_plain": "demo123",
+    "_note_password": "Plain text password used ONLY to generate bcrypt hash during seeding. Never stored.",
+    "role": "tenant_admin",
+    "phone": "+1 (555) 000-0001",
+    "status": "active",
+    "source": "demo_seed"
+  },
+
+  "demo_tenant": {
+    "name": "Demo Organization",
+    "contactEmail": "demo@knowvana.com",
+    "industry": "Technology",
+    "size": "1-50",
+    "plan": "free",
+    "status": "trial",
+    "maxUsers": 5
+  }
+}

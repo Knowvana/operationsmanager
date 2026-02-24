@@ -28,6 +28,8 @@
 //   Logger.setUser('admin@knowvana.com');
 // ============================================================================
 
+import globalLogStore from './globalLogStore';
+
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 
 // Default configuration — App Admins can change this at runtime
@@ -103,6 +105,9 @@ function addSystemLog(entry) {
     }
   }
 
+  // Add to GlobalLogStore for cross-browser access
+  globalLogStore.addSystemLog(entry);
+
   notify();
 }
 
@@ -112,6 +117,8 @@ function addApiLog(entry) {
   if (apiLogs.length > config.maxBufferSize) {
     apiLogs.pop();
   }
+  // Add to GlobalLogStore for cross-browser access
+  globalLogStore.addApiLog(entry);
   notify();
 }
 
@@ -222,48 +229,20 @@ const Logger = {
   // Batch flush to Firestore
   // This is async but callers don't need to await it
   async flushToDatabase() {
-    if (flushBuffer.length === 0) return { flushed: 0 };
-
-    const toFlush = flushBuffer.splice(0, flushBuffer.length);
-    const batchId = `batch_${Date.now()}`;
-
-    // Mark entries with batch ID
-    toFlush.forEach((entry) => { entry._batchId = batchId; });
-
-    // NOTE: Actual Firestore write will be implemented when Firebase service
-    // is connected. For now, we log the flush event and clear the buffer.
-    // This architecture is ready — just plug in the Firestore batched write.
-    if (config.consoleOutput) {
-      console.log(
-        `[FLUSH] Batch ${batchId}: ${toFlush.length} logs ready for Firestore persistence`,
-        toFlush.map((e) => `${e.level}:${e.source}:${e.message.substring(0, 40)}`)
-      );
-    }
-
-    return { flushed: toFlush.length, batchId };
+    console.log('Flush to database pending due to Firebase persistence');
   },
 
-  // Subscribe to log updates (returns unsubscribe function)
-  subscribe(fn) {
-    subscribers.add(fn);
-    return () => subscribers.delete(fn);
-  },
-
-  // Configuration (App Admin only)
-  getConfig() { return { ...config }; },
-
-  updateConfig(newConfig) {
-    const oldFlushInterval = config.flushIntervalSeconds;
-    config = { ...config, ...newConfig };
-    // Restart flush timer if interval changed
-    if (newConfig.flushIntervalSeconds && newConfig.flushIntervalSeconds !== oldFlushInterval) {
-      startFlushTimer();
-    }
-    Logger.info('Logger', 'Logging configuration updated', newConfig);
+  getConfig() {
+    return config;
   },
 
   getLogLevels() {
     return Object.keys(LOG_LEVELS);
+  },
+
+  subscribe(fn) {
+    subscribers.add(fn);
+    return () => subscribers.delete(fn);
   },
 };
 

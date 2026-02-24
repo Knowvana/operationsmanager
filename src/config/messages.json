@@ -1,0 +1,275 @@
+{
+  "_schema": "Messages — Centralized static text, labels, errors, and notifications used across the entire application. Import this file to display any user-facing text. This ensures consistent messaging and easy localization.",
+
+  "app": {
+    "name": "Operations Manager",
+    "tagline": "Modular Enterprise Operations Management Platform",
+    "welcomeTitle": "Welcome to Operations Manager",
+    "welcomeSubtitle": "Your centralized platform for enterprise operations management",
+    "copyright": "© 2025 Knowvana. All rights reserved."
+  },
+
+  "auth": {
+    "loginTitle": "Sign In",
+    "loginSubtitle": "Enter your credentials to continue",
+    "registerTitle": "Create Account",
+    "registerSubtitle": "Create your account and organization",
+    "logoutSuccess": "You have been signed out successfully.",
+    "sessionExpired": "Your session has expired. Please sign in again.",
+    "errors": {
+      "invalidCredentials": "Invalid email or password.",
+      "accountSuspended": "Your account has been suspended. Please contact support.",
+      "accountInactive": "Your account is inactive. Please contact support.",
+      "duplicateEmail": "An account with this email already exists.",
+      "weakPassword": "Password must be at least 6 characters.",
+      "passwordMismatch": "Passwords do not match.",
+      "emailRequired": "Email is required.",
+      "nameRequired": "Full name is required.",
+      "emailInvalid": "Please enter a valid email address.",
+      "nameInvalid": "Name must contain only letters, spaces, hyphens, and apostrophes.",
+      "phoneInvalid": "Please enter a valid phone number.",
+      "authFailed": "Authentication failed. Please check your credentials.",
+      "registrationFailed": "Failed to create account. Please try again."
+    },
+    "success": {
+      "accountCreated": "Account created successfully!",
+      "registrationComplete": "Registration Complete!",
+      "registrationCompleteMessage": "Your account and organization have been created successfully. You can now log in to access your dashboard.",
+      "loginRedirect": "Login & Go to Dashboard",
+      "emailAvailable": "Email is available."
+    }
+  },
+
+  "registration": {
+    "wizardTitle": "Register",
+    "wizardSubtitle": "Create your account and organization",
+    "step1Title": "Create Account",
+    "step1Description": "Create your account to get started. Your password is securely hashed before storage.",
+    "step2Title": "Create Tenant",
+    "step2Description": "Create your organization workspace. This is required to complete registration.",
+    "tenantRequired": "You must create an organization to complete registration.",
+    "tenantSubmitLabel": "Create Organization & Complete",
+    "accountCreating": "Creating your account...",
+    "tenantCreating": "Creating your organization..."
+  },
+
+  "tenant": {
+    "createTitle": "Create Tenant",
+    "editTitle": "Edit Tenant",
+    "deleteTitle": "Delete Tenant",
+    "errors": {
+      "nameRequired": "Tenant name is required.",
+      "nameInvalid": "Tenant name must be 2-100 characters with only letters, numbers, spaces, and hyphens.",
+      "nameDuplicate": "A tenant with this name already exists.",
+      "contactRequired": "Contact email is required.",
+      "contactInvalid": "Please enter a valid contact email.",
+      "maxUsersReached": "Maximum number of users reached for this tenant.",
+      "deleteFailed": "Failed to delete tenant.",
+      "createFailed": "Failed to create tenant.",
+      "updateFailed": "Failed to update tenant."
+    },
+    "success": {
+      "created": "Tenant created successfully.",
+      "updated": "Tenant updated successfully.",
+      "deleted": "Tenant deleted successfully."
+    },
+    "tiers": {
+      "free": {
+        "label": "Free",
+        "maxUsers": 5,
+        "description": "Free tier — up to 5 users per tenant"
+      },
+      "starter": {
+        "label": "Starter",
+        "maxUsers": 25,
+        "description": "Starter tier — up to 25 users"
+      },
+      "professional": {
+        "label": "Professional",
+        "maxUsers": 100,
+        "description": "Professional tier — up to 100 users"
+      },
+      "enterprise": {
+        "label": "Enterprise",
+        "maxUsers": -1,
+        "description": "Enterprise tier — unlimited users"
+      }
+    }
+  },
+
+  "users": {
+    "roles": {
+      "tenant_admin": "Tenant Admin",
+      "tenant_user": "Tenant User",
+      "tenant_owner": "Tenant Owner",
+      "system_admin": "System Admin"
+    },
+    "errors": {
+      "maxUsersReached": "Cannot create more users. Maximum user limit ({maxUsers}) reached for this tenant.",
+      "duplicateEmail": "A user with this email already exists in this tenant.",
+      "onlyOneTenantAdmin": "A tenant can only have one Tenant Admin. This tenant already has a Tenant Admin.",
+      "createFailed": "Failed to create user.",
+      "updateFailed": "Failed to update user.",
+      "deleteFailed": "Failed to delete user."
+    },
+    "success": {
+      "created": "User created successfully.",
+      "updated": "User updated successfully.",
+      "deleted": "User deleted successfully."
+    }
+  },
+
+  "dashboard": {
+    "platformAdmin": {
+      "title": "Platform Admin - Overview",
+      "welcome": "Welcome back, {name}",
+      "systemHealth": "System Health",
+      "operational": "Operational",
+      "degraded": "Degraded",
+      "checking": "Checking…",
+      "allServicesRunning": "All services running",
+      "firebaseConnectedDbNeeds": "Firebase connected · DB needs setup",
+      "cannotReachFirebase": "Cannot reach Firebase",
+      "connectingToFirebase": "Connecting to Firebase…"
+    },
+    "tenantAdmin": {
+      "title": "Dashboard",
+      "welcome": "Welcome, {name}",
+      "licensedModules": "Licensed Modules",
+      "noModulesYet": "No modules licensed yet. Contact your administrator.",
+      "manageUsers": "Manage Users",
+      "tenantSettings": "Tenant Settings"
+    },
+    "tiles": {
+      "users": "Users",
+      "tenants": "Tenants",
+      "logs": "Log Entries",
+      "database": "Database",
+      "manage": "Manage"
+    }
+  },
+
+  "database": {
+    "states": {
+      "initialized": "Initialized",
+      "empty": "Database Created — Empty",
+      "not_initialized": "Pending Initialization",
+      "unknown": "Checking…",
+      "not_configured": "Not Configured"
+    },
+    "schemaItems": {
+      "tenantSchema": "Tenant Schema Initialized",
+      "userSchema": "User Schema Initialized",
+      "logsSchema": "Logs Schema Initialized",
+      "adminSchema": "System Admin Schema Initialized"
+    },
+    "labels": {
+      "provider": "Firebase Firestore",
+      "connected": "Connected",
+      "notConnected": "Not Connected",
+      "databaseType": "Database Type"
+    }
+  },
+
+  "settings": {
+    "title": "Platform Settings",
+    "subtitle": "Global configuration — App Admin only",
+    "database": {
+      "title": "Database Configuration",
+      "description": "Manage your Firebase Firestore connection and database structure.",
+      "connectionStatus": "Connection Status",
+      "databaseConfig": "Database Configuration",
+      "collections": "Collections",
+      "dangerZone": "Danger Zone",
+      "dangerDescription": "These actions cannot be undone. Use with caution.",
+      "wipeTitle": "Wipe Database",
+      "wipeDescription": "Delete all documents from all collections but keep the collection structure intact.",
+      "wipeConfirm": "This will delete all documents from all collections but keep the collection structure intact. This action cannot be undone.",
+      "deleteTitle": "Delete All Database Data",
+      "deleteDescription": "Permanently delete all documents from all collections. Complete database reset.",
+      "deleteConfirm": "This will permanently delete all documents from all collections. Your database will be completely empty. This action cannot be undone.",
+      "saveSuccess": "Your changes have been saved successfully to the database.",
+      "saveFailed": "An unknown error occurred while updating configuration."
+    },
+    "logging": {
+      "title": "Logging Configuration",
+      "description": "Control what gets logged across the platform. Only App Admins can modify these settings."
+    },
+    "security": {
+      "title": "Security & Access",
+      "description": "Authentication, authorization, and access control settings."
+    }
+  },
+
+  "homePage": {
+    "heroTitle": "Enterprise Operations Management",
+    "heroSubtitle": "Streamline your business operations with our powerful, modular platform. Monitor, manage, and optimize your workflows — all in one place.",
+    "features": [
+      {
+        "title": "Operations Monitoring",
+        "description": "Real-time monitoring of your operational workflows with intelligent alerts and dashboards."
+      },
+      {
+        "title": "Shift Roster Management",
+        "description": "Plan, schedule, and manage team shifts with drag-and-drop rosters, availability tracking, and automated conflict detection."
+      },
+      {
+        "title": "Multi-Tenant Architecture",
+        "description": "Isolated workspaces for each organization with role-based access control and data security."
+      },
+      {
+        "title": "Modular Design",
+        "description": "Subscribe only to the modules you need. Scale up as your operations grow."
+      },
+      {
+        "title": "Analytics & Reporting",
+        "description": "Comprehensive analytics with customizable reports to drive data-informed decisions."
+      }
+    ],
+    "ctaRegister": "Get Started Free",
+    "ctaLogin": "Sign In",
+    "ctaLearnMore": "Learn More"
+  },
+
+  "comingSoon": {
+    "title": "Coming Soon",
+    "subtitle": "We're building something amazing for you. Your licensed modules will appear here shortly.",
+    "description": "Our team is working hard to deliver powerful operations management tools."
+  },
+
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "close": "Close",
+    "confirm": "Confirm",
+    "back": "Back",
+    "next": "Next",
+    "finish": "Finish",
+    "loading": "Loading...",
+    "saving": "Saving...",
+    "deleting": "Deleting...",
+    "refreshing": "Refreshing...",
+    "noData": "No data available.",
+    "error": "An error occurred. Please try again.",
+    "success": "Operation completed successfully.",
+    "required": "This field is required.",
+    "viewAll": "View All",
+    "manage": "Manage",
+    "search": "Search...",
+    "filter": "Filter",
+    "refresh": "Refresh",
+    "export": "Export",
+    "import": "Import"
+  },
+
+  "validation": {
+    "emailRegex": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$",
+    "nameRegex": "^[a-zA-Z\\s'-]{2,100}$",
+    "tenantNameRegex": "^[a-zA-Z0-9\\s-]{2,100}$",
+    "phoneRegex": "^[+]?[\\d\\s()-]{7,20}$",
+    "minPasswordLength": 6
+  }
+}

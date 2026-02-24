@@ -1,15 +1,19 @@
 // ============================================================================
-// TopNav — Global top navigation bar.
+// TopNav — Global top navigation bar (used on EVERY page).
 //
 // ARCHITECTURE NOTE:
-// This component is ALWAYS visible when a user is authenticated.
-// It receives module list and active module from the parent AppShell.
-// It never imports module-specific code — it's purely data-driven.
+// This is the SINGLE top navigation component used across the entire app:
+//   - HomePage (unauthenticated): shows Register + Sign In buttons
+//   - TenantAdmin (authenticated): shows user menu + Monitor
+//   - PlatformAdmin (authenticated): shows System Admin + user menu + Monitor
 //
-// Structure: [Brand Logo] [Module Tabs] ............. [Settings] [User Menu]
+// Menu items are role-driven via the `user` prop:
+//   - No user → Register + Sign In
+//   - user.isSystemAdmin → System Admin badge + Settings
+//   - tenant_admin/tenant_user → user menu only
 // ============================================================================
 import React, { useState, useRef, useEffect } from 'react';
-import { Settings, LogOut, ChevronDown, User, MonitorDot, Shield } from 'lucide-react';
+import { Settings, LogOut, ChevronDown, User, UserPlus, LogIn, MonitorDot, Shield } from 'lucide-react';
 
 export default function TopNav({
   appName = 'Operations Manager',
@@ -18,8 +22,9 @@ export default function TopNav({
   onSwitchModule,
   onOpenSettings,
   onLogout,
-  onSystemAdmin,
+  onLogin,
   onRegister,
+  onSystemAdmin,
   user,
   onToggleRightPanel,
   isRightPanelOpen = false,
@@ -37,6 +42,8 @@ export default function TopNav({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  const isAuthenticated = !!user;
 
   return (
     <>
@@ -56,8 +63,8 @@ export default function TopNav({
               <span className="text-sm font-bold text-surface-800 hidden sm:block">{appName}</span>
             </div>
 
-            {/* System Admin — simple navigation button */}
-            {user?.isSystemAdmin && (
+            {/* System Admin badge — only for system admins */}
+            {isAuthenticated && user.isSystemAdmin && onSystemAdmin && (
               <button
                 onClick={onSystemAdmin}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all duration-200 border text-surface-600 border-transparent hover:bg-amber-50 hover:text-amber-700 hover:border-amber-200"
@@ -67,19 +74,8 @@ export default function TopNav({
               </button>
             )}
 
-            {/* Register — visible when not logged in */}
-            {!user && onRegister && (
-              <button
-                onClick={onRegister}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all duration-200 border text-brand-600 border-transparent hover:bg-brand-50 hover:border-brand-200"
-              >
-                <User size={14} />
-                <span className="hidden sm:inline">Register</span>
-              </button>
-            )}
-
-            {/* Module Tabs */}
-            {modules.length > 0 && (
+            {/* Module Tabs — authenticated users with modules */}
+            {isAuthenticated && modules.length > 0 && (
               <nav className="flex items-center gap-1">
                 {modules.map((mod) => {
                   const Icon = mod.icon;
@@ -106,9 +102,34 @@ export default function TopNav({
             )}
           </div>
 
-          {/* Right: Settings + User + Monitor */}
+          {/* Right side */}
           <div className="flex items-center gap-2">
-            {onOpenSettings && (
+            {/* Unauthenticated: Register + Sign In */}
+            {!isAuthenticated && (
+              <>
+                {onRegister && (
+                  <button
+                    onClick={onRegister}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all duration-200 text-brand-600 hover:bg-brand-50 hover:text-brand-700"
+                  >
+                    <UserPlus size={15} />
+                    <span className="hidden sm:inline">New User</span>
+                  </button>
+                )}
+                {onLogin && (
+                  <button
+                    onClick={onLogin}
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-sm font-semibold transition-all duration-200 bg-brand-600 text-white hover:bg-brand-700 shadow-sm"
+                  >
+                    <LogIn size={15} />
+                    <span className="hidden sm:inline">Sign In</span>
+                  </button>
+                )}
+              </>
+            )}
+
+            {/* Authenticated: Settings gear */}
+            {isAuthenticated && onOpenSettings && (
               <button
                 onClick={onOpenSettings}
                 className="p-2 rounded-lg text-surface-400 hover:text-surface-600 hover:bg-surface-100 transition-colors"
@@ -118,8 +139,8 @@ export default function TopNav({
               </button>
             )}
 
-            {/* User Menu */}
-            {user && (
+            {/* Authenticated: User Menu */}
+            {isAuthenticated && (
               <div className="relative" ref={menuRef}>
                 <button
                   onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}

@@ -29,25 +29,25 @@ const RESULT_CONFIG = {
   pending: { color: 'text-surface-400', bg: 'bg-surface-50' },
 };
 
-// Maps log source strings to the actual rendered component name in the UI.
-// Add entries here as new components start logging.
+// Maps log source strings to human-readable event names.
+// Shows the event that triggered the log entry (e.g., User Button Click, System Auto Refresh, etc).
 const SOURCE_TO_COMPONENT = {
-  'Overview':        'PlatformOverview',
-  'Navigation':      'PlatformDashboard',
-  'Settings':        'PlatformSettings',
-  'Platform':        'DatabaseSetupWizard',
-  'PlatformService': 'PlatformService',
-  'Auth':            'SystemAdminLogin',
-  'Firebase':        'FirebaseService',
-  'API':             'APILayer',
-  'Logger':          'LoggerService',
-  'System':          'SystemCore',
-  'Tenants':         'TenantManagement',
-  'Modules':         'ModuleRegistry',
-  'Users':           'UserManagement',
-  'Security':        'SecuritySettings',
-  'Database':        'DatabaseSetupWizard',
-  'App':             'App',
+  'Platform Admin - Dashboard Summary': 'Platform Admin - Dashboard Summary',
+  'Platform Admin - Logs':              'Platform Admin - Logs',
+  'Platform Admin - Users':             'Platform Admin - Users',
+  'Platform Admin - Modules':           'Platform Admin - Modules',
+  'Platform Admin - Settings':          'Platform Admin - Settings',
+  'Tenant Admin - Overview':            'Tenant Admin - Overview',
+  'Tenant Admin - User Management':     'Tenant Admin - User Management',
+  'Tenant Admin - Settings':            'Tenant Admin - Settings',
+  'Auth':                               'User Login',
+  'Registration':                       'User Registration',
+  'App':                                'Application Startup',
+  'System':                             'System Auto Refresh',
+  'Firebase':                           'Firebase Connection',
+  'PlatformService':                    'Platform Service Call',
+  'UserService':                        'User Service Call',
+  'Logger':                             'Logger Service',
 };
 
 // --- Sort value extraction for any column ---
@@ -57,7 +57,7 @@ function getSortValue(log, colId, tab) {
       case 'level': return log.level || '';
       case 'time': return log.timestamp || '';
       case 'component': return SOURCE_TO_COMPONENT[log.source] || log.source || '';
-      case 'source': return log.source || '';
+      case 'event': return SOURCE_TO_COMPONENT[log.source] || log.source || '';
       case 'user': return log.user || '';
       case 'message': return log.message || '';
       case 'result': return log.result || '';
@@ -81,8 +81,8 @@ function getSortValue(log, colId, tab) {
 const SYSTEM_COLUMNS = [
   { id: 'level', label: 'Level', width: 70, minWidth: 50 },
   { id: 'time', label: 'Time', width: 95, minWidth: 70 },
-  { id: 'component', label: 'Component', width: 130, minWidth: 80 },
-  { id: 'source', label: 'Source', width: 90, minWidth: 60 },
+  { id: 'component', label: 'Component', width: 150, minWidth: 100 },
+  { id: 'event', label: 'Event', width: 120, minWidth: 80 },
   { id: 'user', label: 'User', width: 120, minWidth: 70 },
   { id: 'message', label: 'Message', width: 0, minWidth: 100 },
   { id: 'result', label: 'Result', width: 75, minWidth: 50 },
@@ -107,6 +107,7 @@ export default function LogsViewer() {
   const [sourceFilter, setSourceFilter] = useState('all');
   const [selectedLog, setSelectedLog] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [refreshInterval, setRefreshInterval] = useState(60); // in seconds
 
   // --- Interactive column state ---
   const [sysColOrder, setSysColOrder] = useState(SYSTEM_COLUMNS.map(c => c.id));
@@ -247,8 +248,10 @@ export default function LogsViewer() {
           const comp = SOURCE_TO_COMPONENT[log.source] || log.source || '—';
           return <span className="inline-block px-1.5 py-0.5 rounded bg-brand-50 text-brand-600 font-semibold text-xs">{comp}</span>;
         }
-        case 'source':
-          return <span className="inline-block px-1.5 py-0.5 rounded bg-surface-100 text-surface-600 font-semibold text-xs">{log.source}</span>;
+        case 'event': {
+          const event = SOURCE_TO_COMPONENT[log.source] || log.source || '—';
+          return <span className="inline-block px-1.5 py-0.5 rounded bg-surface-100 text-surface-600 font-semibold text-xs">{event}</span>;
+        }
         case 'user':
           return <span className="text-surface-500 text-xs">{log.user || '—'}</span>;
         case 'message':
@@ -294,11 +297,67 @@ export default function LogsViewer() {
 
   return (
     <div className="animate-fade-in h-full flex flex-col">
-      <PageHeader
-        title="System Logs"
-        subtitle={`${filteredLogs.length} entries | ${flushCount} pending flush`}
-        icon={ScrollText}
-      />
+      <div className="flex items-center justify-between mb-4">
+        <PageHeader
+          title="Platform Admin - Logs"
+          subtitle={`${filteredLogs.length} entries`}
+          icon={ScrollText}
+        />
+        <Button variant="primary" size="xs" onClick={() => alert('Logs Settings - Coming Soon')}>
+          View Logs Settings
+        </Button>
+      </div>
+
+      {/* Auto-save message and controls */}
+      <Card variant="flat" className="p-3 mb-4 flex-shrink-0">
+        <div className="flex items-center justify-between">
+          <div className="text-xs text-surface-600">
+            <span className="font-semibold">Logs are auto-saved to database every {Math.round(Logger.getConfig().flushIntervalSeconds / 60)} minute(s)</span>
+            <span className="text-surface-400 ml-2">({flushCount} - Logs in Memory Pending database flush)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" size="xs" onClick={() => alert('Update Settings - Coming Soon')}>
+              Update Setting
+            </Button>
+            <Button variant="ghost" size="xs" onClick={() => Logger.flushToDatabase()}>
+              Flush Now
+            </Button>
+          </div>
+        </div>
+      </Card>
+
+      {/* Auto-refresh controls */}
+      <Card variant="flat" className="p-3 mb-4 flex-shrink-0">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoRefresh}
+                onChange={(e) => setAutoRefresh(e.target.checked)}
+                className="w-4 h-4 rounded border-surface-300 text-brand-600 focus:ring-2 focus:ring-brand-200"
+              />
+              <span className="text-xs font-semibold text-surface-600">Auto Refresh</span>
+            </label>
+            {autoRefresh && (
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-surface-500">Every</label>
+                <select
+                  value={refreshInterval}
+                  onChange={(e) => setRefreshInterval(parseInt(e.target.value))}
+                  className="px-2 py-1 text-xs border border-surface-200 rounded bg-white focus:outline-none focus:ring-2 focus:ring-brand-200"
+                >
+                  <option value={10}>10s</option>
+                  <option value={30}>30s</option>
+                  <option value={60}>60s</option>
+                  <option value={120}>2m</option>
+                  <option value={300}>5m</option>
+                </select>
+              </div>
+            )}
+          </div>
+        </div>
+      </Card>
 
       {/* Tab Switcher + Toolbar */}
       <Card variant="flat" className="p-3 mb-4 flex-shrink-0">
@@ -403,7 +462,7 @@ export default function LogsViewer() {
               <p className="text-sm font-medium">No {activeTab === 'system' ? 'logs' : 'API calls'} match your filters</p>
             </div>
           ) : (
-            <table className="w-full text-sm" style={{ tableLayout: 'fixed' }}>
+            <table className="w-full text-sm">
               <thead className="sticky top-0 bg-surface-50 z-10">
                 <tr className="border-b border-surface-200">
                   {orderedCols.map((col) => {
@@ -458,7 +517,7 @@ export default function LogsViewer() {
                       className={`border-b border-surface-50 cursor-pointer transition-colors ${isSelected ? 'bg-brand-50/50' : 'hover:bg-surface-50'}`}
                     >
                       {orderedCols.map((col) => (
-                        <td key={col.id} className="px-3 py-2 overflow-hidden text-ellipsis whitespace-nowrap">
+                        <td key={col.id} className={`px-3 py-2 ${col.id === 'message' ? 'whitespace-normal break-words max-w-[300px]' : 'overflow-hidden text-ellipsis whitespace-nowrap'}`}>
                           {renderCellContent(log, col.id, activeTab)}
                         </td>
                       ))}

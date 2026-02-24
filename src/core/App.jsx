@@ -7,25 +7,28 @@
 //
 // Routing strategy (no router library needed yet):
 //   URL /admin-setup  → SystemAdminLogin  (JSON-based auth)
-//   URL /register     → UserRegistrationWizard (self-service registration)
-//   URL /             → TenantLogin       (Firestore-based auth)
+//   URL /register     → UserRegistrationWizard overlay
+//   URL /             → HomePage with Sign In modal overlay
 //
 // After login:
-//   System Admin → PlatformDashboard (with DB Setup Wizard as modal)
-//   Tenant User  → ComingSoon (placeholder until modules are built)
+//   System Admin → PlatformDashboard
+//   Tenant User  → TenantAdminDashboard
 //
-// WHY URL-based login?
-//   - Tenant users should NEVER see the admin login page
-//   - Admin setup URL can be bookmarked / shared securely
-//   - Same LoginForm component, different auth handler + branding
+// The global TopNav is used on EVERY page via:
+//   - HomePage (passes onLogin/onRegister to TopNav)
+//   - AppShell (wraps PlatformDashboard and TenantAdminDashboard)
+//
+// Sign In is shown as a MODAL over the HomePage (not a separate page).
 // ============================================================================
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
-import { Logger, PlatformService } from '@shared';
+import { Layers } from 'lucide-react';
+import { Logger, PlatformService, ActionModal, LoginForm } from '@shared';
 import SystemAdminLogin from './auth/SystemAdminLogin';
-import TenantLogin from './auth/TenantLogin';
 import PlatformDashboard from './PlatformDashboard';
-import ComingSoon from './views/ComingSoon';
+import TenantAdminDashboard from './views/TenantAdminDashboard';
+import HomePage from './views/HomePage';
 import UserRegistrationWizard from './setup/UserRegistrationWizard';
+import UserService from '../shared/services/userService';
 import appConfig from '@config/app.json';
 
 export default function App() {
@@ -33,6 +36,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [isDatabaseReady, setIsDatabaseReady] = useState(false);
   const [showRegistration, setShowRegistration] = useState(false);
+  const [showLoginModal, setShowLoginModal] = useState(false);
 
   // Check if database is already initialized on app mount
   useEffect(() => {
@@ -70,9 +74,18 @@ export default function App() {
   // --- Auth Handlers ---
   const handleLogin = useCallback((authenticatedUser) => {
     setUser(authenticatedUser);
+    setShowLoginModal(false);
     Logger.setUser(authenticatedUser.email);
     Logger.info('App', 'User authenticated', { email: authenticatedUser.email, role: authenticatedUser.role });
   }, []);
+
+  // Tenant login handler for the Sign In modal
+  const handleTenantLogin = useCallback(async (email, password) => {
+    Logger.info('Auth', 'Tenant login attempt', { email });
+    const authenticatedUser = await UserService.authenticateUser(email, password);
+    Logger.info('Auth', 'Tenant login successful', { email, userId: authenticatedUser.userId });
+    handleLogin(authenticatedUser);
+  }, [handleLogin]);
 
   const handleLogout = useCallback(() => {
     Logger.info('App', 'User logged out', { email: user?.email });
@@ -94,29 +107,66 @@ export default function App() {
   }, []);
 
   const handleOpenRegistration = useCallback(() => {
+    setShowLoginModal(false);
     setShowRegistration(true);
+  }, []);
+
+  const handleShowLogin = useCallback(() => {
+    setShowRegistration(false);
+    setShowLoginModal(true);
   }, []);
 
   // --- Render Decision Tree ---
 
-  // Gate 1: Not authenticated → Show appropriate login screen
+  // Gate 1: Not authenticated → Show HomePage with modals
   if (!user) {
+    // Admin setup route always shows admin login (full page)
+    if (isAdminSetupRoute) {
+      return (
+        <SystemAdminLogin
+          appName={appConfig.appName}
+          onLogin={handleLogin}
+          isDatabaseReady={isDatabaseReady}
+          onDatabaseReady={handleDatabaseReady}
+        />
+      );
+    }
+
+    // Default: HomePage + Sign In modal + Registration modal
     return (
       <>
-        {isAdminSetupRoute ? (
-          <SystemAdminLogin
-            onLogin={handleLogin}
+        <HomePage
+          appName={appConfig.appName}
+          onLogin={handleShowLogin}
+          onRegister={handleOpenRegistration}
+        />
+        {/* Sign In Modal — overlays on top of HomePage */}
+        <ActionModal
+          isOpen={showLoginModal}
+          onClose={() => setShowLoginModal(false)}
+          title="Sign In"
+          icon={Layers}
+          size="sm"
+          variant="custom"
+        >
+          <LoginForm
+            onLogin={handleTenantLogin}
             appName={appConfig.appName}
+            title="Sign In"
+            subtitle="Enter your credentials to access your workspace"
+            icon={Layers}
+            accentColor="brand"
+            embedded
+            footerHint={
+              <span>
+                Don't have an account?{' '}
+                <button onClick={handleOpenRegistration} className="text-brand-600 font-semibold hover:text-brand-700 transition-colors">
+                  Register here
+                </button>
+              </span>
+            }
           />
-        ) : (
-          <TenantLogin
-            onLogin={handleLogin}
-            onRegister={handleOpenRegistration}
-            appName={appConfig.appName}
-          />
-        )}
-
-        {/* Registration Wizard — overlays the login screen */}
+        </ActionModal>
         <UserRegistrationWizard
           isOpen={showRegistration}
           onClose={() => setShowRegistration(false)}
@@ -139,9 +189,9 @@ export default function App() {
     );
   }
 
-  // Gate 3: Tenant user authenticated → ComingSoon (modules not built yet)
+  // Gate 3: Tenant user authenticated → Tenant Admin Dashboard
   return (
-    <ComingSoon
+    <TenantAdminDashboard
       user={user}
       onLogout={handleLogout}
       appName={appConfig.appName}

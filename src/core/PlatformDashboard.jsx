@@ -10,19 +10,22 @@
 // (not as a modal). Logs has its own dedicated viewer page.
 // ============================================================================
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { AppShell, Card, PageHeader, EmptyState, Button, Logger, SettingsConfig, PlatformService, ProgressModal, SuccessModal, ErrorModal, ConfirmationModal } from '@shared';
+import { AppShell, Card, PageHeader, EmptyState, Button, Logger, SettingsConfig, PlatformService, UserService, ProgressModal, SuccessModal, ErrorModal, ConfirmationModal } from '@shared';
 import {
   LayoutDashboard, Users, Building2, Settings,
-  Activity, Shield, Database, CheckCircle2,
+  Activity, Shield, Database, CheckCircle2, XCircle,
   ScrollText, Save, HardDrive, RefreshCw, ExternalLink,
-  Clock, BarChart3, AlertTriangle, Layers, Zap
+  Clock, BarChart3, AlertTriangle, Layers, Zap, ArrowRight,
+  Table2, Eye, ChevronRight, Flame
 } from 'lucide-react';
-import DatabaseSetupWizard from './setup/DatabaseSetupWizard';
+import demoData from '@config/demo-data.json';
 import LogsViewer from './views/LogsViewer';
 import TenantManagement from './views/TenantManagement';
+import UserManagement from './views/UserManagement'; // Import UserManagement component
 import firebaseConfig from '@config/firebase.json';
 import databaseSchema from '@config/database-schema.json';
 import appConfig from '@config/app.json';
+import messages from '@config/messages.json';
 
 // Side nav items for the System Admin dashboard
 const ADMIN_NAV_ITEMS = [
@@ -34,9 +37,13 @@ const ADMIN_NAV_ITEMS = [
   { id: 'settings',  label: 'Settings',     icon: Settings },
 ];
 
+const DEMO_USER_EMAIL = demoData.demo_user.email;
+
 export default function PlatformDashboard({ user, onLogout, appName, isDatabaseReady = false, onDatabaseReady }) {
   const [activeView, setActiveView] = useState('overview');
-  const [isSetupWizardOpen, setIsSetupWizardOpen] = useState(false);
+  const [demoObjectsExist, setDemoObjectsExist] = useState(false);
+  const [isDemoLoading, setIsDemoLoading] = useState(false);
+  const [activitySearch, setActivitySearch] = useState('');
 
   // --- Dynamic stats from Firestore ---
   // NOTE: dbState is the single source of truth for database status.
@@ -49,6 +56,7 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
   const [dbStats, setDbStats] = useState({ adminCount: 0, tenantCount: 0, logCount: 0, configCount: 0 });
   const [dbStatsLoading, setDbStatsLoading] = useState(true); // true initially — we load on mount
   const [dbState, setDbState] = useState('unknown');
+  const [userStats, setUserStats] = useState({ total: 0, active: 0, inactive: 0, addedThisWeek: 0, tenantCount: 0 });
 
   // Derived: Firebase is reachable if we successfully queried state at least once
   const firebaseReachable = dbState !== 'unknown';
@@ -65,7 +73,6 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
 
   // --- Database deletion state ---
   const [showWipeConfirmation, setShowWipeConfirmation] = useState(false);
-  const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
   const [isDeletingDatabase, setIsDeletingDatabase] = useState(false);
   const [deletionProgress, setDeletionProgress] = useState(0);
   const [showDeletionSuccess, setShowDeletionSuccess] = useState(false);
@@ -115,7 +122,6 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
   // and on manual Refresh. Shows a ProgressModal with minimum 1.5s display.
   // =========================================================================
   const loadDatabaseStats = useCallback(async (showProgress = true) => {
-    const startTime = Date.now();
     if (showProgress) {
       setIsRefreshing(true);
       setRefreshProgress(10);
@@ -123,29 +129,30 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
     setDbStatsLoading(true);
     try {
       if (showProgress) setRefreshProgress(30);
-      const [stats, state] = await Promise.all([
+      const [stats, state, uStats, demoCheck] = await Promise.all([
         PlatformService.getDatabaseStats(),
         PlatformService.getDatabaseState(),
+        UserService.getUserStats().catch(() => ({ total: 0, active: 0, inactive: 0, addedThisWeek: 0, tenantCount: 0 })),
+        UserService.isEmailTaken(DEMO_USER_EMAIL).catch(() => false),
       ]);
-      if (showProgress) setRefreshProgress(80);
-      console.log('[PlatformDashboard] Stats loaded:', stats, 'state:', state);
+      Logger.info('API Call', 'getDatabaseStats', { stats });
+      Logger.info('API Call', 'getDatabaseState', { state });
+      Logger.info('API Call', 'getUserStats', { uStats });
+      Logger.info('API Call', 'isEmailTaken', { email: DEMO_USER_EMAIL, taken: demoCheck });
+      if (showProgress) setRefreshProgress(90);
       setDbStats(stats);
       setDbState(state);
+      setUserStats(uStats);
+      setDemoObjectsExist(demoCheck);
       if (showProgress) setRefreshProgress(100);
-      Logger.info('Overview', 'Database stats loaded', { ...stats, state });
+      Logger.info('Platform Admin - Dashboard Summary', 'Stats loaded', { ...stats, state, demoExists: demoCheck });
     } catch (err) {
       console.error('[PlatformDashboard] Error loading stats:', err);
-      Logger.error('Overview', 'Failed to load database stats', { error: err.message });
+      Logger.error('Platform Admin - Dashboard Summary', 'Failed to load stats', { error: err.message });
     } finally {
       setDbStatsLoading(false);
       if (showProgress) {
-        // Keep modal visible for at least 1.5s so user always sees feedback
-        const elapsed = Date.now() - startTime;
-        const remaining = Math.max(1500 - elapsed, 300);
-        setTimeout(() => {
-          setIsRefreshing(false);
-          setRefreshProgress(0);
-        }, remaining);
+        setTimeout(() => { setIsRefreshing(false); setRefreshProgress(0); }, 300);
       }
     }
   }, []);
@@ -212,11 +219,71 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
     }
   }, [dbConfig]);
 
-  const handleDatabaseSetupComplete = () => {
-    setIsSetupWizardOpen(false);
-    onDatabaseReady?.();
-    Logger.info('Platform', 'Database setup completed');
-  };
+  // --- Demo Object Handlers ---
+  const handleCreateDemoObjects = useCallback(async () => {
+    setIsDemoLoading(true);
+    try {
+      const { AuthService } = await import('@shared');
+      // Create demo user
+      const passwordHash = await AuthService.hashPassword(demoData.demo_user.password_plain);
+      await UserService.registerUser({
+        email: demoData.demo_user.email,
+        displayName: demoData.demo_user.displayName,
+        password: demoData.demo_user.password_plain,
+        phone: demoData.demo_user.phone,
+      });
+      // Create demo tenant
+      const tenant = await PlatformService.createTenant({
+        name: demoData.demo_tenant.name,
+        contactEmail: demoData.demo_tenant.contactEmail,
+        industry: demoData.demo_tenant.industry,
+        size: demoData.demo_tenant.size,
+        plan: demoData.demo_tenant.plan,
+        status: demoData.demo_tenant.status,
+      });
+      // Link user to tenant
+      const allUsers = await UserService.getAllUsers();
+      const demoUser = allUsers.find(u => u.email === demoData.demo_user.email);
+      if (demoUser) {
+        await UserService.linkUserToTenant(demoUser.id, tenant.id);
+        await UserService.updateUser(demoUser.id, { role: 'tenant_admin' });
+      }
+      Logger.info('Platform Admin - Dashboard Summary', 'Demo objects created', { tenantId: tenant.id });
+      setDemoObjectsExist(true);
+      loadDatabaseStats(false);
+    } catch (err) {
+      Logger.error('Platform Admin - Dashboard Summary', 'Failed to create demo objects', { error: err.message });
+      alert('Failed to create demo objects: ' + err.message);
+    } finally {
+      setIsDemoLoading(false);
+    }
+  }, [loadDatabaseStats]);
+
+  const handleDeleteDemoObjects = useCallback(async () => {
+    setIsDemoLoading(true);
+    try {
+      // Find and delete demo user
+      const allUsers = await UserService.getAllUsers();
+      const demoUser = allUsers.find(u => u.email === demoData.demo_user.email);
+      if (demoUser) {
+        await UserService.deleteUser(demoUser.id);
+      }
+      // Find and delete demo tenant
+      const allTenants = await PlatformService.getAllTenants();
+      const demoTenant = allTenants.find(t => t.name === demoData.demo_tenant.name);
+      if (demoTenant) {
+        await PlatformService.deleteTenant(demoTenant.id);
+      }
+      Logger.info('Platform Admin - Dashboard Summary', 'Demo objects deleted');
+      setDemoObjectsExist(false);
+      loadDatabaseStats(false);
+    } catch (err) {
+      Logger.error('Platform Admin - Dashboard Summary', 'Failed to delete demo objects', { error: err.message });
+      alert('Failed to delete demo objects: ' + err.message);
+    } finally {
+      setIsDemoLoading(false);
+    }
+  }, [loadDatabaseStats]);
 
   // --- Database Deletion Handlers ---
   const handleWipeDatabase = useCallback(async () => {
@@ -249,35 +316,7 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
     }
   }, [loadDatabaseStats]);
 
-  const handleDeleteDatabase = useCallback(async () => {
-    setShowDeleteConfirmation(false);
-    setIsDeletingDatabase(true);
-    setDeletionProgress(0);
-    setShowDeletionError(false);
-    try {
-      console.log('[PlatformDashboard] Starting complete database deletion...');
-      setDeletionProgress(25);
-      
-      const result = await PlatformService.deleteAllCollections();
-      
-      setDeletionProgress(100);
-      setIsDeletingDatabase(false);
-      setDeletionSuccessMessage(`Successfully deleted ${result.deletedCount} documents. Database is now empty.`);
-      setShowDeletionSuccess(true);
-      Logger.info('Settings', 'Database deleted successfully', { deletedCount: result.deletedCount });
-      console.log('[PlatformDashboard] Database deletion completed:', result);
-      
-      // Reload stats after deletion
-      setTimeout(() => loadDatabaseStats(), 1000);
-    } catch (err) {
-      setIsDeletingDatabase(false);
-      const errorMsg = err?.message || 'Failed to delete database';
-      setDeletionErrorMessage(errorMsg);
-      setShowDeletionError(true);
-      Logger.error('Settings', 'Failed to delete database', { error: errorMsg });
-      console.error('[PlatformDashboard] Error deleting database:', err);
-    }
-  }, [loadDatabaseStats]);
+  // NOTE: Schema deletion removed per architecture decision — only wipe (data only) is allowed.
 
   const handleSaveLogConfig = () => {
     Logger.updateConfig(logConfig);
@@ -300,21 +339,12 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
         return <TenantManagement isDatabaseReady={isDatabaseReady} />;
 
       case 'users':
-        return (
-          <div className="animate-fade-in">
-            <PageHeader title="User Management" subtitle="Manage platform users and access" icon={Users} />
-            <EmptyState
-              icon={<Users size={40} className="text-surface-300" />}
-              title="No tenant users yet"
-              description="Users will appear here once tenants are created and users are added."
-            />
-          </div>
-        );
+        return <UserManagement />;
 
       case 'modules':
         return (
           <div className="animate-fade-in">
-            <PageHeader title="Module Registry" subtitle="Available modules for tenant subscriptions" icon={Activity} />
+            <PageHeader title="Platform Admin - Modules" subtitle="Available modules for tenant subscriptions" icon={Activity} />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <ModuleCard
                 name="Operations Monitor"
@@ -339,7 +369,7 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
         return (
           <div className="animate-fade-in" style={{ height: 'calc(100vh - 140px)' }}>
             <SettingsConfig
-              title="Platform Settings"
+              title="Platform Admin - Settings"
               subtitle="Global configuration — App Admin only"
               icon={Settings}
               defaultTab="database"
@@ -365,85 +395,100 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
     const apiLogs = Logger.getApiLogs();
     const errors = logs.filter((l) => l.level === 'error').length;
     const warnings = logs.filter((l) => l.level === 'warn').length;
-    const last5 = logs.slice(0, 5);
-    return { total: logs.length, apiTotal: apiLogs.length, errors, warnings, last5 };
+    const last50 = logs.slice(0, 50);
+    return { total: logs.length, apiTotal: apiLogs.length, errors, warnings, last50 };
   }, [activeView]);
 
   const schemaInfo = useMemo(() => PlatformService.getSchemaInfo(), []);
 
-  // Dynamic checklist — derived from real-time state.
-  // "Database Created" = Firebase is reachable (Firestore project exists and responds).
-  // "Database Initialized" = system_admins has at least 1 doc (isDatabaseInitialized check).
-  const checklist = useMemo(() => [
-    { label: 'Firebase Connected', done: firebaseReachable },
-    { label: 'Database Created', done: firebaseReachable },
-    { label: 'Database Initialized', done: dbInitialized },
-    { label: 'Admin Account Created', done: dbStats.adminCount > 0 },
-    { label: 'Logging Active', done: dbStats.logCount > 0 || dbStats.configCount > 0 },
-    { label: 'First Tenant Created', done: dbStats.tenantCount > 0 },
-    { label: 'Users Onboarded', done: false },
-    { label: 'Module Subscriptions', done: false },
-  ], [firebaseReachable, dbInitialized, dbStats, dbState]);
-
-  const checklistDone = checklist.filter((c) => c.done).length;
+  // NOTE: Configuration Status section removed — no longer needed.
 
   function renderOverview() {
+    // Filter recent activity by search
+    const filteredActivity = activitySearch
+      ? logStats.last50.filter(l => (l.message || '').toLowerCase().includes(activitySearch.toLowerCase()) || (l.source || '').toLowerCase().includes(activitySearch.toLowerCase()))
+      : logStats.last50;
+
     return (
       <div className="space-y-0 animate-fade-in">
         <PageHeader
-          title="Platform Overview"
-          subtitle={`Welcome back, ${user?.displayName || 'Administrator'}`}
+          title={messages.dashboard.platformAdmin.title}
+          subtitle={`${messages.dashboard.platformAdmin.welcome.replace('{name}', user?.displayName || 'Administrator')} · ${user?.email || ''}`}
           icon={LayoutDashboard}
         />
 
         {/* ─── Row 1: Key Metrics ─── */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mt-6">
           <StatCard
             icon={<Zap size={20} className="text-emerald-500" />}
-            label="System Health"
-            value={firebaseReachable ? 'Operational' : (dbStatsLoading ? 'Checking…' : 'Degraded')}
+            label={messages.dashboard.platformAdmin.systemHealth}
+            value={firebaseReachable ? messages.dashboard.platformAdmin.operational : (dbStatsLoading ? messages.dashboard.platformAdmin.checking : messages.dashboard.platformAdmin.degraded)}
             gradient={firebaseReachable ? 'from-emerald-50 to-teal-50' : 'from-amber-50 to-orange-50'}
-            detail={firebaseReachable ? (dbInitialized ? 'All services running' : 'Firebase connected · DB needs setup') : (dbStatsLoading ? 'Connecting to Firebase…' : 'Cannot reach Firebase')}
+            detail={firebaseReachable ? (dbInitialized ? messages.dashboard.platformAdmin.allServicesRunning : messages.dashboard.platformAdmin.firebaseConnectedDbNeeds) : (dbStatsLoading ? messages.dashboard.platformAdmin.connectingToFirebase : messages.dashboard.platformAdmin.cannotReachFirebase)}
             glow={firebaseReachable ? 'shadow-emerald-100/60' : 'shadow-amber-100/60'}
             borderGradient={firebaseReachable ? 'from-emerald-300 to-teal-300' : 'from-amber-300 to-orange-300'}
           />
           <StatCard
             icon={<Database size={20} className="text-brand-500" />}
-            label="Database"
-            value={dbInitialized ? 'Ready' : (firebaseReachable ? 'Not Ready' : 'Checking…')}
-            gradient={dbInitialized ? 'from-brand-50 to-blue-50' : 'from-amber-50 to-orange-50'}
-            detail={getDbStateLabel(dbState)}
-            glow={dbInitialized ? 'shadow-brand-100/60' : 'shadow-amber-100/60'}
-            borderGradient={dbInitialized ? 'from-brand-300 to-blue-300' : 'from-amber-300 to-orange-300'}
+            label={messages.dashboard.tiles.database}
+            value={demoObjectsExist ? 'Demo Data' : 'No Demo Data'}
+            gradient={demoObjectsExist ? 'from-brand-50 to-blue-50' : 'from-amber-50 to-orange-50'}
+            detail={demoObjectsExist ? 'Demo data initialized in database' : 'Ready to initialize demo data'}
+            glow={demoObjectsExist ? 'shadow-brand-100/60' : 'shadow-amber-100/60'}
+            borderGradient={demoObjectsExist ? 'from-brand-300 to-blue-300' : 'from-amber-300 to-orange-300'}
             actionButton={
-              dbState === 'empty' ? (
-                <Button variant="primary" size="xs" onClick={() => setIsSetupWizardOpen(true)}>
-                  Import Data
+              !demoObjectsExist ? (
+                <Button variant="primary" size="xs" onClick={handleCreateDemoObjects} disabled={isDemoLoading}>
+                  {isDemoLoading ? 'Creating...' : 'Init Demo Data'}
                 </Button>
-              ) : dbState === 'not_initialized' ? (
-                <Button variant="primary" size="xs" onClick={() => setIsSetupWizardOpen(true)}>
-                  Initialize
+              ) : (
+                <Button variant="ghost" size="xs" onClick={handleDeleteDemoObjects} disabled={isDemoLoading}>
+                  {isDemoLoading ? 'Deleting...' : 'Delete Demo'}
                 </Button>
-              ) : null
+              )
+            }
+          />
+          <StatCard
+            icon={<Users size={20} className="text-blue-500" />}
+            label={messages.dashboard.tiles.users}
+            value={dbStatsLoading ? '...' : String(userStats.total)}
+            gradient="from-blue-50 to-indigo-50"
+            detail={userStats.total === 0 ? 'No users registered' : `${userStats.active} active · ${userStats.addedThisWeek} this week`}
+            glow="shadow-blue-100/60"
+            borderGradient="from-blue-300 to-indigo-300"
+            actionButton={
+              <Button variant="primary" size="xs" onClick={() => setActiveView('users')}>
+                {messages.dashboard.tiles.manage}
+              </Button>
             }
           />
           <StatCard
             icon={<Building2 size={20} className="text-violet-500" />}
-            label="Tenants"
+            label={messages.dashboard.tiles.tenants}
             value={dbStatsLoading ? '...' : String(dbStats.tenantCount)}
             gradient="from-violet-50 to-purple-50"
             detail={dbStats.tenantCount === 0 ? 'Create your first tenant' : `${dbStats.tenantCount} active`}
             glow="shadow-violet-100/60"
             borderGradient="from-violet-300 to-purple-300"
+            actionButton={
+              <Button variant="primary" size="xs" onClick={() => setActiveView('tenants')}>
+                {messages.dashboard.tiles.manage}
+              </Button>
+            }
           />
           <StatCard
             icon={<ScrollText size={20} className="text-amber-500" />}
-            label="Log Entries"
+            label={messages.dashboard.tiles.logs}
             value={dbStatsLoading ? '...' : String(dbStats.logCount)}
             gradient="from-amber-50 to-orange-50"
-            detail={dbStats.logCount === 0 ? 'No logs persisted yet' : `${dbStats.logCount} persisted to database`}
+            detail={dbStats.logCount === 0 ? 'No logs persisted yet' : `${dbStats.logCount} persisted`}
             glow="shadow-amber-100/60"
             borderGradient="from-amber-300 to-orange-300"
+            actionButton={
+              <Button variant="primary" size="xs" onClick={() => setActiveView('logs')}>
+                View All
+              </Button>
+            }
           />
         </div>
 
@@ -452,193 +497,169 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
           <div className="h-1 bg-gradient-to-r from-transparent via-brand-300/80 to-transparent rounded-full" />
         </div>
 
-        {/* ─── Row 2: DB Objects + Config Status + Logging ─── */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {/* Database Objects (dynamic) */}
-          <GlowCard>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-bold text-surface-700 flex items-center gap-2">
-                <HardDrive size={15} className="text-brand-500" />
-                Database Objects
-              </h3>
-              <div className="flex items-center gap-2">
-                {dbStatsLoading && <RefreshCw size={12} className="text-surface-300 animate-spin" />}
-                {firebaseReachable ? (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600">CONNECTED</span>
-                ) : (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-600">CHECKING</span>
-                )}
-              </div>
-            </div>
-            <div className="space-y-2.5">
-              <MiniStat label="Root Collection" value={schemaInfo.rootCollection} mono />
-              <MiniStat label="Root Document" value={schemaInfo.rootDocument} mono />
-              <MiniStat label="Collections" value={String(schemaInfo.collectionCount)} />
-              <MiniStat label="Total Fields" value={String(schemaInfo.totalFields)} />
-              <MiniStat label="Module Collections" value={String(schemaInfo.moduleCollectionCount)} />
-              <div className="h-px bg-gradient-to-r from-transparent via-surface-200 to-transparent my-1" />
-              <MiniStat label="Admins (DB)" value={dbStatsLoading ? '...' : String(dbStats.adminCount)} />
-              <MiniStat label="Tenants (DB)" value={dbStatsLoading ? '...' : String(dbStats.tenantCount)} />
-              <MiniStat label="Logs (DB)" value={dbStatsLoading ? '...' : String(dbStats.logCount)} />
-              <MiniStat label="Config Docs (DB)" value={dbStatsLoading ? '...' : String(dbStats.configCount)} />
-              <MiniStat label="Provider" value="Firebase Firestore" />
-              <MiniStat label="Project ID" value={firebaseConfig.projectId || '—'} mono />
-            </div>
-            {!dbInitialized && (
-              <Button variant="primary" size="sm" className="mt-4" icon={<Database size={14} />} onClick={() => setIsSetupWizardOpen(true)}>
-                {dbState === 'empty' ? 'Import Default Data' : 'Run Setup Wizard'}
-              </Button>
-            )}
-          </GlowCard>
-
-          {/* Configuration Status (dynamic) */}
-          <GlowCard>
-            <h3 className="text-sm font-bold text-surface-700 mb-4 flex items-center gap-2">
-              <Shield size={15} className="text-brand-500" />
-              Configuration Status
+        {/* ─── Database Objects: 4-Column Horizontal Layout ─── */}
+        <GlowCard>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-bold text-surface-700 flex items-center gap-2">
+              <HardDrive size={15} className="text-brand-500" />
+              Database Objects
             </h3>
-            <div className="space-y-3">
-              {checklist.map((item, i) => (
-                <StatusRow key={i} label={item.label} done={item.done} />
-              ))}
+            <div className="flex items-center gap-2">
+              {dbStatsLoading && <RefreshCw size={12} className="text-surface-300 animate-spin" />}
+              {firebaseReachable ? (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600">CONNECTED</span>
+              ) : (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-600">CHECKING</span>
+              )}
+              <Button variant="primary" size="xxs" icon={<RefreshCw size={11} />} onClick={() => loadDatabaseStats(true)} disabled={isRefreshing}>
+                {messages.common.refresh}
+              </Button>
             </div>
-            <div className="mt-4 pt-3 border-t border-surface-100">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-surface-400">Setup Progress</span>
-                <span className="text-xs font-bold text-brand-600">{checklistDone}/{checklist.length}</span>
-              </div>
-              <div className="w-full h-2 bg-surface-100 rounded-full mt-1.5 overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-brand-500 to-teal-500 rounded-full transition-all duration-500"
-                  style={{ width: `${(checklistDone / checklist.length) * 100}%` }}
-                />
-              </div>
-            </div>
-          </GlowCard>
-
-          {/* Logging Overview (Database + In-Memory) */}
-          <GlowCard>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-bold text-surface-700 flex items-center gap-2">
-                <BarChart3 size={15} className="text-brand-500" />
-                Logging Summary
-              </h3>
-            </div>
-            
-            {/* Database Logs */}
-            <div className="mb-4">
-              <p className="text-[10px] font-bold text-surface-600 mb-2 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-brand-500" />
-                Database Logs
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-0">
+            {/* Col 1: Core Objects */}
+            <div className="p-4 border-r border-surface-100">
+              <p className="text-[10px] font-bold text-surface-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                <Database size={11} className="text-brand-500" /> Core Objects
               </p>
               <div className="space-y-2">
-                <MiniStat label="Persisted Logs" value={dbStatsLoading ? '...' : String(dbStats.logCount)} />
-                <MiniStat label="Status" value={dbStats.logCount > 0 ? 'Active' : 'No logs yet'} valueColor={dbStats.logCount > 0 ? 'text-emerald-600' : 'text-surface-400'} />
+                <MiniStat label="Root Collection" value={schemaInfo.rootCollection} mono />
+                <MiniStat label="Root Document" value={schemaInfo.rootDocument} mono />
+                <MiniStat label="Collections" value={String(schemaInfo.collectionCount)} />
+                <MiniStat label="Total Fields" value={String(schemaInfo.totalFields)} />
+                <MiniStat label="Module Collections" value={String(schemaInfo.moduleCollectionCount)} />
               </div>
             </div>
-
-            <div className="h-px bg-gradient-to-r from-transparent via-surface-200 to-transparent my-3" />
-
-            {/* In-Memory Logs */}
-            <div>
-              <p className="text-[10px] font-bold text-surface-600 mb-2 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-blue-500" />
-                In-Memory Logs
+            {/* Col 2: Users */}
+            <div className="p-4 border-r border-surface-100">
+              <p className="text-[10px] font-bold text-surface-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                <Users size={11} className="text-blue-500" /> Users
               </p>
               <div className="space-y-2">
-                <MiniStat label="Total Logs" value={String(logStats.total)} />
-                <MiniStat label="API Calls" value={String(logStats.apiTotal)} />
+                <MiniStat label="Application Admins" value={dbStatsLoading ? '...' : String(dbStats.adminCount)} />
+                <MiniStat label="Tenant Admins" value={dbStatsLoading ? '...' : String(userStats.total > 0 ? Math.min(userStats.total, dbStats.tenantCount || 1) : 0)} />
+                <MiniStat label="Total Users" value={dbStatsLoading ? '...' : String(userStats.total)} />
+                <MiniStat label="Active Users" value={dbStatsLoading ? '...' : String(userStats.active)} valueColor="text-emerald-600" />
+                <MiniStat label="Inactive Users" value={dbStatsLoading ? '...' : String(userStats.inactive)} valueColor={userStats.inactive > 0 ? 'text-amber-600' : undefined} />
+                <MiniStat label="Added This Week" value={dbStatsLoading ? '...' : String(userStats.addedThisWeek)} valueColor={userStats.addedThisWeek > 0 ? 'text-brand-600' : undefined} />
+              </div>
+            </div>
+            {/* Col 3: Logs */}
+            <div className="p-4 border-r border-surface-100">
+              <p className="text-[10px] font-bold text-surface-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                <ScrollText size={11} className="text-amber-500" /> Logs
+              </p>
+              <div className="space-y-2">
+                <MiniStat label="Total Log Entries" value={dbStatsLoading ? '...' : String(dbStats.logCount)} />
                 <MiniStat label="Errors" value={String(logStats.errors)} valueColor={logStats.errors > 0 ? 'text-rose-600' : undefined} />
                 <MiniStat label="Warnings" value={String(logStats.warnings)} valueColor={logStats.warnings > 0 ? 'text-amber-600' : undefined} />
-                <MiniStat label="Buffer" value={`${Logger.getFlushBufferSize()} pending`} />
+                <MiniStat label="In-Memory Logs" value={String(logStats.total)} />
               </div>
             </div>
-
-            <Button variant="primary" size="sm" className="w-full mt-4" icon={<ScrollText size={14} />} onClick={() => setActiveView('logs')}>
-              View All Logs
-            </Button>
-          </GlowCard>
-        </div>
+            {/* Col 4: API Stats */}
+            <div className="p-4">
+              <p className="text-[10px] font-bold text-surface-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                <BarChart3 size={11} className="text-emerald-500" /> API Stats
+              </p>
+              <div className="space-y-2">
+                <MiniStat label="Total API Calls" value={String(logStats.apiTotal)} />
+                <MiniStat label="Success Count" value={String(Logger.getApiLogs().filter(l => l.success).length)} valueColor="text-emerald-600" />
+                <MiniStat label="Failure Count" value={String(Logger.getApiLogs().filter(l => !l.success).length)} valueColor={Logger.getApiLogs().filter(l => !l.success).length > 0 ? 'text-rose-600' : undefined} />
+                <MiniStat label="Avg Response Time" value={`${Logger.getApiLogs().length > 0 ? Math.round(Logger.getApiLogs().reduce((s, l) => s + (l.durationMs || 0), 0) / Logger.getApiLogs().length) : 0}ms`} />
+                <MiniStat label="API Calls Today" value={String(Logger.getApiLogs().filter(l => l.timestamp && new Date(l.timestamp).toDateString() === new Date().toDateString()).length)} />
+              </div>
+            </div>
+          </div>
+        </GlowCard>
 
         {/* ─── Gradient Separator ─── */}
         <div className="py-6">
           <div className="h-1 bg-gradient-to-r from-transparent via-brand-300/80 to-transparent rounded-full" />
         </div>
 
-        {/* ─── Row 3: Recent Activity + Platform Info ─── */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Recent Activity */}
-          <GlowCard>
-            <h3 className="text-sm font-bold text-surface-700 mb-4 flex items-center gap-2">
+        {/* ─── Recent Activity (last 50, searchable) ─── */}
+        <GlowCard>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-bold text-surface-700 flex items-center gap-2">
               <Clock size={15} className="text-brand-500" />
               Recent Activity
+              <span className="text-[10px] text-surface-400 font-normal">({filteredActivity.length} entries)</span>
             </h3>
-            {logStats.last5.length === 0 ? (
-              <p className="text-xs text-surface-400 italic">No recent activity.</p>
-            ) : (
-              <div className="space-y-2">
-                {logStats.last5.map((log) => (
-                  <div key={log.id} className="flex items-start gap-2.5 py-1.5 border-b border-surface-50 last:border-0">
-                    <div className={`
-                      w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0
-                      ${log.level === 'error' ? 'bg-rose-500' : log.level === 'warn' ? 'bg-amber-500' : log.level === 'info' ? 'bg-blue-500' : 'bg-surface-300'}
-                    `} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs text-surface-700 truncate">{log.message}</p>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-[10px] text-surface-400">{log.source}</span>
-                        <span className="text-[10px] text-surface-300">•</span>
-                        <span className="text-[10px] text-surface-400">{log.user}</span>
-                        <span className="text-[10px] text-surface-300">•</span>
-                        <span className="text-[10px] text-surface-300">
-                          {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : '—'}
-                        </span>
-                      </div>
+            <div className="relative w-48">
+              <input
+                type="text"
+                value={activitySearch}
+                onChange={(e) => setActivitySearch(e.target.value)}
+                placeholder="Search activity..."
+                className="w-full pl-3 pr-3 py-1.5 text-xs border border-surface-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 transition-all"
+              />
+            </div>
+          </div>
+          {filteredActivity.length === 0 ? (
+            <p className="text-xs text-surface-400 italic py-4 text-center">No activity found.</p>
+          ) : (
+            <div className="space-y-1 max-h-[400px] overflow-y-auto">
+              {filteredActivity.map((log) => (
+                <div key={log.id} className="flex items-start gap-2.5 py-1.5 border-b border-surface-50 last:border-0">
+                  <div className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${log.level === 'error' ? 'bg-rose-500' : log.level === 'warn' ? 'bg-amber-500' : log.level === 'info' ? 'bg-blue-500' : 'bg-surface-300'}`} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-surface-700 truncate">{log.message}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-[10px] text-surface-400">{log.source}</span>
+                      <span className="text-[10px] text-surface-300">•</span>
+                      <span className="text-[10px] text-surface-400">{log.user}</span>
+                      <span className="text-[10px] text-surface-300">•</span>
+                      <span className="text-[10px] text-surface-300">{log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : '—'}</span>
                     </div>
-                    <span className={`
-                      text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0
-                      ${log.result === 'success' ? 'bg-emerald-50 text-emerald-600' : log.result === 'failure' ? 'bg-rose-50 text-rose-600' : 'bg-surface-50 text-surface-400'}
-                    `}>
-                      {log.result}
-                    </span>
                   </div>
-                ))}
-              </div>
-            )}
-          </GlowCard>
+                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${log.result === 'success' ? 'bg-emerald-50 text-emerald-600' : log.result === 'failure' ? 'bg-rose-50 text-rose-600' : 'bg-surface-50 text-surface-400'}`}>
+                    {log.result}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </GlowCard>
 
-          {/* Platform Information */}
-          <GlowCard>
-            <h3 className="text-sm font-bold text-surface-700 mb-4 flex items-center gap-2">
-              <Layers size={15} className="text-brand-500" />
-              Platform Information
-            </h3>
-            <div className="space-y-2.5">
+        {/* ─── Gradient Separator ─── */}
+        <div className="py-6">
+          <div className="h-1 bg-gradient-to-r from-transparent via-brand-300/80 to-transparent rounded-full" />
+        </div>
+
+        {/* ─── Platform Information ─── */}
+        <GlowCard>
+          <h3 className="text-sm font-bold text-surface-700 mb-4 flex items-center gap-2">
+            <Layers size={15} className="text-brand-500" />
+            Platform Information
+          </h3>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="space-y-2">
               <MiniStat label="Platform" value={appConfig.appName || appName} />
               <MiniStat label="Version" value={appConfig.appVersion || '1.0.0'} mono />
               <MiniStat label="Environment" value="Development" />
-              <div className="h-px bg-gradient-to-r from-transparent via-surface-200 to-transparent my-1" />
+            </div>
+            <div className="space-y-2">
               <MiniStat label="Framework" value="React 18 + Vite 5" />
               <MiniStat label="UI Library" value="Tailwind CSS 3" />
               <MiniStat label="Backend" value="Firebase 10" />
-              <div className="h-px bg-gradient-to-r from-transparent via-surface-200 to-transparent my-1" />
+            </div>
+            <div className="space-y-2">
               <MiniStat label="Total Modules" value={String(appConfig.availableModules?.length || 0)} />
+              <MiniStat label="Provider" value={messages.database.labels.provider} />
+              <MiniStat label="Project ID" value={firebaseConfig.projectId || '—'} mono />
+            </div>
+            <div className="space-y-2">
               <MiniStat label="Logged In As" value={user?.email || '—'} mono />
               <MiniStat label="Role" value={user?.role?.replace('_', ' ') || '—'} />
+              {databaseSchema.firestore_console_url && (
+                <a href={databaseSchema.firestore_console_url} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold text-brand-600 hover:text-brand-700 hover:bg-brand-50 rounded-lg transition-colors">
+                  <ExternalLink size={11} /> Firestore Console
+                </a>
+              )}
             </div>
-            {databaseSchema.firestore_console_url && (
-              <a
-                href={databaseSchema.firestore_console_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 mt-4 px-3 py-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700 hover:bg-brand-50 rounded-lg transition-colors"
-              >
-                <ExternalLink size={13} />
-                Open Firestore Console
-              </a>
-            )}
-          </GlowCard>
-        </div>
+          </div>
+        </GlowCard>
       </div>
     );
   }
@@ -646,81 +667,81 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
   // --- Settings Tab Content Renderers ---
 
   function renderDatabaseTab() {
+    // Build collection details from schema for the table viewer
+    const allCollections = Object.entries(databaseSchema.collections).map(([key, col]) => ({
+      key,
+      path: col.path,
+      description: col.description,
+      fields: Object.entries(col.fields).map(([fk, fv]) => ({ name: fk, type: typeof fv === 'string' ? fv : JSON.stringify(fv) })),
+    }));
+
     return (
       <div className="space-y-6 animate-fade-in">
         <div>
-          <h3 className="text-base font-bold text-surface-800 mb-1">Database Configuration</h3>
-          <p className="text-sm text-surface-400">Manage your Firebase Firestore connection and database structure.</p>
+          <h3 className="text-base font-bold text-surface-800 mb-1">{messages.settings.database.title}</h3>
+          <p className="text-sm text-surface-400">{messages.settings.database.description}</p>
         </div>
 
-        {/* Connection Status */}
+        {/* Database Type & Connection Details */}
         <Card variant="flat" className="p-4">
           <div className="flex items-center justify-between mb-3">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400">Connection Status</h4>
-            <Button
-              variant="primary"
-              size="xxs"
-              icon={<RefreshCw size={11} />}
-              onClick={() => loadDatabaseStats(true)}
-              disabled={isRefreshing}
-            >
-              {isRefreshing ? 'Refreshing…' : 'Refresh'}
+            <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400">{messages.settings.database.connectionStatus}</h4>
+            <Button variant="primary" size="xxs" icon={<RefreshCw size={11} />} onClick={() => loadDatabaseStats(true)} disabled={isRefreshing}>
+              {isRefreshing ? messages.common.refreshing : messages.common.refresh}
             </Button>
           </div>
-          <div className="space-y-2.5">
-            {/* Row: Firebase Connection (reachable or not) */}
-            <SettingsRow
-              label="Firebase Connection"
-              value={firebaseReachable ? 'Connected' : (dbStatsLoading ? 'Checking…' : 'Unreachable')}
-              valueColor={firebaseReachable ? 'text-emerald-600' : 'text-amber-600'}
-            />
-            {/* Row: Database State (single action button based on state) */}
-            <div className="flex items-center justify-between py-1.5">
-              <span className="text-xs text-surface-500">Database State</span>
-              <div className="flex items-center gap-2">
-                <span className={`text-xs font-semibold ${
-                  dbState === 'initialized' ? 'text-emerald-600' :
-                  dbState === 'empty' ? 'text-amber-600' :
-                  'text-surface-500'
-                }`}>
-                  {getDbStateLabel(dbState)}
-                </span>
-                {(dbState === 'empty' || dbState === 'not_initialized') && (
-                  <Button
-                    variant="primary"
-                    size="xxs"
-                    onClick={() => setIsSetupWizardOpen(true)}
-                  >
-                    {dbState === 'empty' ? 'Import' : 'Initialize'}
-                  </Button>
-                )}
-              </div>
+
+          {/* Database Type */}
+          <div className="flex items-center gap-3 p-3 rounded-lg bg-gradient-to-r from-brand-50 to-teal-50 border border-brand-200/50 mb-4">
+            <div className="p-2 rounded-lg bg-white shadow-sm">
+              <Flame size={18} className="text-amber-500" />
             </div>
-            <SettingsRow label="Provider" value="Firebase Firestore" />
+            <div>
+              <p className="text-xs font-bold text-surface-800">{messages.database.labels.databaseType}: {messages.database.labels.provider}</p>
+              <p className="text-[10px] text-surface-500">Google Cloud Firestore — NoSQL document database</p>
+            </div>
+          </div>
+
+          <div className="space-y-2.5">
+            <SettingsRow label="Provider" value={messages.database.labels.provider} />
             <SettingsRow label="Project ID" value={firebaseConfig.projectId || '—'} mono />
             <SettingsRow label="Auth Domain" value={firebaseConfig.authDomain || '—'} mono />
+            <SettingsRow label="Storage Bucket" value={firebaseConfig.storageBucket || '—'} mono />
+            <SettingsRow label="App ID" value={firebaseConfig.appId ? `${firebaseConfig.appId.substring(0, 20)}...` : '—'} mono />
+
+            <div className="h-px bg-gradient-to-r from-transparent via-surface-200 to-transparent my-2" />
+
+            {/* Database Status */}
+            <div className="flex items-center justify-between py-1.5">
+              <span className="text-xs font-semibold text-surface-600">Database Status</span>
+              <span className={`inline-flex items-center gap-1.5 text-xs font-bold ${firebaseReachable ? 'text-emerald-600' : 'text-rose-600'}`}>
+                {firebaseReachable ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+                {firebaseReachable ? messages.database.labels.connected : messages.database.labels.notConnected}
+              </span>
+            </div>
+
+            {/* Database State */}
+            <div className="flex items-center justify-between py-1.5">
+              <span className="text-xs font-semibold text-surface-600">Database State</span>
+              <span className={`text-xs font-bold ${
+                dbState === 'initialized' ? 'text-emerald-600' :
+                dbState === 'empty' ? 'text-amber-600' :
+                dbState === 'not_initialized' ? 'text-rose-500' :
+                'text-surface-500'
+              }`}>
+                {getDbStateLabel(dbState)}
+              </span>
+            </div>
           </div>
         </Card>
 
-        {/* Database Configuration */}
+        {/* Configuration JSON */}
         <Card variant="flat" className="p-4">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 mb-3">Database Configuration</h4>
+          <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 mb-3">Configuration</h4>
           <div className="space-y-3">
-            <SettingsRow
-              label="Root Collection"
-              value={dbConfig.rootCollection}
-              mono
-            />
-            <SettingsRow
-              label="Root Document"
-              value={dbConfig.rootDocument}
-              mono
-            />
-            <SettingsRow
-              label="Document Path"
-              value={`${dbConfig.rootCollection}/${dbConfig.rootDocument}`}
-              mono
-            />
+            <SettingsRow label="Root Collection" value={dbConfig.rootCollection} mono />
+            <SettingsRow label="Root Document" value={dbConfig.rootDocument} mono />
+            <SettingsRow label="Document Path" value={`${dbConfig.rootCollection}/${dbConfig.rootDocument}`} mono />
             <EditableField
               label="Firestore Console URL"
               value={dbConfig.firestoreUrl}
@@ -729,122 +750,62 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
           </div>
         </Card>
 
-        {/* Database Policies */}
+        {/* Database Tables Viewer */}
         <Card variant="flat" className="p-4">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 mb-3">Database Policies</h4>
-          <div className="space-y-3">
-            <EditableField
-              label="Max Documents Per Collection"
-              value={dbConfig.maxDocsPerCollection || '10000'}
-              onChange={(v) => setDbConfig((p) => ({ ...p, maxDocsPerCollection: v }))}
-            />
-            <EditableField
-              label="Data Retention (days)"
-              value={dbConfig.dataRetentionDays || '90'}
-              onChange={(v) => setDbConfig((p) => ({ ...p, dataRetentionDays: v }))}
-            />
-            <EditableField
-              label="Backup Frequency (hours)"
-              value={dbConfig.backupFrequencyHours || '24'}
-              onChange={(v) => setDbConfig((p) => ({ ...p, backupFrequencyHours: v }))}
-            />
-            <ToggleRow
-              label="Enable Automatic Backups"
-              value={dbConfig.autoBackupEnabled !== false}
-              onChange={(v) => setDbConfig((p) => ({ ...p, autoBackupEnabled: v }))}
-            />
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 flex items-center gap-2">
+              <Table2 size={13} />
+              Database Tables & Schema
+            </h4>
+            <span className="text-[10px] text-surface-400">{allCollections.length} collections</span>
           </div>
-        </Card>
-
-        {/* Collections (Read-Only) */}
-        <Card variant="flat" className="p-4">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 mb-3">Collections (Read-Only)</h4>
-          <p className="text-xs text-surface-500 mb-3">These are your actual Firestore collection names. They cannot be edited here.</p>
+          <p className="text-xs text-surface-500 mb-4">Complete schema reference for all Firestore collections used by the platform.</p>
           <div className="space-y-3">
-            {dbConfig.collections.map((col) => (
-              <div key={col.key} className="flex items-center gap-3 py-2 border-b border-surface-50 last:border-0">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-[10px] font-mono text-surface-400 bg-surface-50 px-1.5 py-0.5 rounded">{col.key}</span>
-                    <span className="text-[10px] text-surface-300">{col.fieldCount} fields</span>
-                  </div>
-                  <div className="px-2.5 py-1.5 text-sm border border-surface-200 rounded-lg bg-surface-50 font-mono text-surface-600">
-                    {col.path}
-                  </div>
-                  <p className="text-[10px] text-surface-400 mt-1">{col.description}</p>
-                </div>
-              </div>
+            {allCollections.map((col) => (
+              <CollectionViewer key={col.key} collection={col} rootPath={`${dbConfig.rootCollection}/${dbConfig.rootDocument}`} />
             ))}
           </div>
         </Card>
 
-
-        {/* Danger Zone — Database Operations */}
-        <Card variant="flat" className="p-4 border-rose-200 bg-rose-50/30 mt-6">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-rose-600 mb-3">⚠️ Danger Zone</h4>
-          <p className="text-xs text-surface-600 mb-4">These actions cannot be undone. Use with caution.</p>
+        {/* Danger Zone */}
+        <Card variant="flat" className="p-4 border-rose-200 bg-rose-50/30">
+          <h4 className="text-xs font-bold uppercase tracking-wider text-rose-600 mb-3">{messages.settings.database.dangerZone}</h4>
+          <p className="text-xs text-surface-600 mb-4">{messages.settings.database.dangerDescription}</p>
           <div className="space-y-3">
-            {dbState === 'empty' && (
-              <div>
-                <h5 className="text-xs font-semibold text-surface-700 mb-2">Reinitialize Database</h5>
-                <p className="text-xs text-surface-500 mb-2">Restore default platform data (admins, config, etc.) to an empty database.</p>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  icon={<RefreshCw size={14} />}
-                  onClick={() => setIsSetupWizardOpen(true)}
-                >
-                  Reinitialize with Defaults
-                </Button>
-              </div>
-            )}
+            {/* Demo Object Management */}
             <div>
-              <h5 className="text-xs font-semibold text-surface-700 mb-2">Wipe Database</h5>
-              <p className="text-xs text-surface-500 mb-2">Delete all documents from all collections, but keep the collection structure intact.</p>
-              <Button
-                variant="danger"
-                size="sm"
-                icon={<RefreshCw size={14} />}
-                onClick={() => setShowWipeConfirmation(true)}
-                disabled={isDeletingDatabase}
-              >
-                Wipe All Data
-              </Button>
+              <h5 className="text-xs font-semibold text-surface-700 mb-2">Demo Database Objects</h5>
+              {demoObjectsExist ? (
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-emerald-600 font-semibold">Demo objects already created</span>
+                  <Button variant="danger" size="sm" icon={<AlertTriangle size={14} />} onClick={handleDeleteDemoObjects} disabled={isDemoLoading}>
+                    {isDemoLoading ? 'Deleting...' : 'Delete Demo Objects'}
+                  </Button>
+                </div>
+              ) : (
+                <Button variant="secondary" size="sm" icon={<Database size={14} />} onClick={handleCreateDemoObjects} disabled={isDemoLoading}>
+                  {isDemoLoading ? 'Creating...' : 'Create Demo Objects'}
+                </Button>
+              )}
             </div>
             <div className="border-t border-surface-200 pt-3">
-              <h5 className="text-xs font-semibold text-surface-700 mb-2">Delete Database</h5>
-              <p className="text-xs text-surface-500 mb-2">Permanently delete all documents from all collections. Complete database reset.</p>
-              <Button
-                variant="danger"
-                size="sm"
-                icon={<AlertTriangle size={14} />}
-                onClick={() => setShowDeleteConfirmation(true)}
-                disabled={isDeletingDatabase}
-              >
-                Delete All Data
+              <h5 className="text-xs font-semibold text-surface-700 mb-2">{messages.settings.database.wipeTitle}</h5>
+              <p className="text-xs text-surface-500 mb-2">{messages.settings.database.wipeDescription}</p>
+              <Button variant="danger" size="sm" icon={<RefreshCw size={14} />} onClick={() => setShowWipeConfirmation(true)} disabled={isDeletingDatabase}>
+                Wipe All Data
               </Button>
             </div>
           </div>
         </Card>
 
-        {/* Final Actions */}
+        {/* Save */}
         <div className="flex items-center gap-3 pt-4 border-t border-surface-200">
-          <Button
-            variant="primary"
-            size="sm"
-            icon={<Save size={14} />}
-            onClick={handleSaveDbConfig}
-            disabled={isUpdatingConfig}
-          >
-            {isUpdatingConfig ? 'Saving...' : 'Save Configuration'}
+          <Button variant="primary" size="sm" icon={<Save size={14} />} onClick={handleSaveDbConfig} disabled={isUpdatingConfig}>
+            {isUpdatingConfig ? messages.common.saving : 'Save Configuration'}
           </Button>
           {dbConfig.firestoreUrl && (
-            <a
-              href={dbConfig.firestoreUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700 hover:bg-brand-50 rounded-lg transition-colors"
-            >
+            <a href={dbConfig.firestoreUrl} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700 hover:bg-brand-50 rounded-lg transition-colors">
               <ExternalLink size={13} />
               Open Firestore Console
             </a>
@@ -929,6 +890,40 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
             <p className="text-[10px] text-surface-400 mt-5">
               Oldest entries are discarded when the buffer is full.
             </p>
+          </div>
+        </Card>
+
+        {/* Flush Settings */}
+        <Card variant="flat" className="p-4">
+          <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 mb-3">Flush Settings</h4>
+          <p className="text-xs text-surface-500 mb-3">Configure how often logs are flushed from memory to the database.</p>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-surface-600 mb-2">Flush Interval (seconds)</label>
+              <input
+                type="number"
+                min={10}
+                max={600}
+                step={10}
+                value={logConfig.flushIntervalSeconds || 60}
+                onChange={(e) => setLogConfig((c) => ({ ...c, flushIntervalSeconds: parseInt(e.target.value) || 60 }))}
+                className="w-32 px-3 py-2 text-sm border border-surface-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 focus:border-brand-400 transition-all"
+              />
+              <p className="text-[10px] text-surface-400 mt-1">Default: 60 seconds. Logs are flushed at this interval or when threshold is reached.</p>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-surface-600 mb-2">Flush Threshold (entries)</label>
+              <input
+                type="number"
+                min={10}
+                max={500}
+                step={10}
+                value={logConfig.flushThreshold || 50}
+                onChange={(e) => setLogConfig((c) => ({ ...c, flushThreshold: parseInt(e.target.value) || 50 }))}
+                className="w-32 px-3 py-2 text-sm border border-surface-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 focus:border-brand-400 transition-all"
+              />
+              <p className="text-[10px] text-surface-400 mt-1">Flush immediately when buffer reaches this size.</p>
+            </div>
           </div>
         </Card>
 
@@ -1021,13 +1016,6 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
     >
       {renderContent()}
 
-      {/* Database Setup Wizard — opens as modal over the AppShell */}
-      <DatabaseSetupWizard
-        isOpen={isSetupWizardOpen}
-        onClose={() => setIsSetupWizardOpen(false)}
-        onComplete={handleDatabaseSetupComplete}
-      />
-
       {/* Config Update Progress Modal */}
       <ProgressModal
         isOpen={isUpdatingConfig}
@@ -1064,17 +1052,6 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
         onCancel={() => setShowWipeConfirmation(false)}
       />
 
-      {/* Delete Database Confirmation Modal */}
-      <ConfirmationModal
-        isOpen={showDeleteConfirmation}
-        title="Delete All Database Data"
-        message="This will permanently delete all documents from all collections. Your database will be completely empty. This action cannot be undone."
-        confirmText="Delete All Data"
-        cancelText="Cancel"
-        isDangerous={true}
-        onConfirm={handleDeleteDatabase}
-        onCancel={() => setShowDeleteConfirmation(false)}
-      />
 
       {/* Database Deletion Progress Modal */}
       <ProgressModal
@@ -1154,15 +1131,15 @@ function MiniStat({ label, value, mono = false, valueColor }) {
   );
 }
 
-function StatusRow({ label, done }) {
+function StatusRow({ label, done, small = false }) {
   return (
-    <div className="flex items-center gap-2.5">
+    <div className="flex items-center gap-2">
       {done ? (
-        <CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0" />
+        <CheckCircle2 size={small ? 11 : 14} className="text-emerald-500 flex-shrink-0" />
       ) : (
-        <div className="w-3.5 h-3.5 rounded-full border-2 border-surface-200 flex-shrink-0" />
+        <div className={`${small ? 'w-2.5 h-2.5' : 'w-3.5 h-3.5'} rounded-full border-2 border-surface-200 flex-shrink-0`} />
       )}
-      <span className={`text-xs ${done ? 'text-surface-600' : 'text-surface-400'}`}>{label}</span>
+      <span className={`${small ? 'text-[10px]' : 'text-xs'} ${done ? 'text-surface-600' : 'text-surface-400'}`}>{label}</span>
     </div>
   );
 }
@@ -1233,5 +1210,48 @@ function ModuleCard({ name, description, status, version }) {
       <p className="text-xs text-surface-400 mt-1 mb-3">{description}</p>
       <p className="text-[10px] text-surface-300 font-mono">v{version}</p>
     </Card>
+  );
+}
+
+function CollectionViewer({ collection, rootPath }) {
+  const [isOpen, setIsOpen] = React.useState(false);
+  const fullPath = `${rootPath}/${collection.path}`;
+  return (
+    <div className="border border-surface-200 rounded-lg overflow-hidden">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full flex items-center justify-between px-3 py-2.5 bg-surface-50 hover:bg-surface-100 transition-colors text-left"
+      >
+        <div className="flex items-center gap-2">
+          <Database size={13} className="text-brand-500 flex-shrink-0" />
+          <span className="text-xs font-bold text-surface-700">{collection.path}</span>
+          <span className="text-[10px] font-mono text-surface-400 bg-white px-1.5 py-0.5 rounded border border-surface-200">{collection.key}</span>
+          <span className="text-[10px] text-surface-400">{collection.fields.length} fields</span>
+        </div>
+        <ChevronRight size={13} className={`text-surface-400 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+      </button>
+      {isOpen && (
+        <div className="px-3 py-3 bg-white border-t border-surface-100 animate-fade-in">
+          <p className="text-[10px] text-surface-500 mb-2">{collection.description}</p>
+          <p className="text-[10px] font-mono text-surface-400 mb-3">Path: {fullPath}</p>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-surface-100">
+                <th className="text-left py-1.5 px-2 font-semibold text-surface-500 w-1/3">Field</th>
+                <th className="text-left py-1.5 px-2 font-semibold text-surface-500">Type / Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              {collection.fields.map((f) => (
+                <tr key={f.name} className="border-b border-surface-50">
+                  <td className="py-1.5 px-2 font-mono text-brand-600 font-semibold">{f.name}</td>
+                  <td className="py-1.5 px-2 text-surface-500">{f.type}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
