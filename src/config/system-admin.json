@@ -1,0 +1,8 @@
+{
+  "_schema": "SystemAdmin — The built-in admin account for first-time setup. This user exists ONLY in this JSON file and is used to bootstrap the platform before Firebase is configured.",
+  "email": "admin@knowvana.com",
+  "password": "admin123",
+  "displayName": "System Administrator",
+  "role": "system_admin",
+  "permissions": ["platform.manage", "database.configure", "tenants.manage", "modules.manage"]
+}

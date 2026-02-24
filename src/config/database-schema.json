@@ -1,0 +1,124 @@
+{
+  "_schema": "DatabaseSchema — Defines the Firestore document hierarchy. Root: knowvana → all platform collections live under it. (1) App reads this to know WHERE to store/read data, (2) Developers read this to understand the DB structure.",
+
+  "root_collection": "platforms",
+  "root_document": "knowvana",
+
+  "firestore_console_url": "https://console.firebase.google.com/u/3/project/operations-dashboard-40499/firestore",
+
+  "collections": {
+    "system_admins": {
+      "path": "SystemAdmins",
+      "description": "Platform-level administrators. Passwords are stored as bcrypt hashes (never plain text).",
+      "fields": {
+        "email": "string — Admin email (unique identifier)",
+        "displayName": "string — Display name",
+        "passwordHash": "string — bcrypt hash of the password (NEVER store plain text)",
+        "role": "string — system_admin | support_admin",
+        "permissions": "array<string> — List of permission keys",
+        "status": "string — active | inactive | suspended",
+        "createdAt": "timestamp — When the admin was created",
+        "lastLoginAt": "timestamp — Last login time"
+      }
+    },
+    "tenants": {
+      "path": "Tenants",
+      "description": "Organizations that subscribe to the platform. Each tenant is an isolated workspace.",
+      "fields": {
+        "tenantId": "string — Unique tenant identifier",
+        "name": "string — Organization name",
+        "status": "string — active | suspended | trial",
+        "plan": "string — free | starter | professional | enterprise",
+        "subscribedModules": "array<string> — Module IDs this tenant has access to",
+        "maxUsers": "number — Maximum users allowed",
+        "createdAt": "timestamp",
+        "updatedAt": "timestamp",
+        "metadata": {
+          "industry": "string",
+          "contactEmail": "string",
+          "contactPhone": "string"
+        }
+      }
+    },
+    "tenant_users": {
+      "path": "TenantUsers",
+      "description": "Users who belong to a tenant. A user can belong to multiple tenants.",
+      "fields": {
+        "userId": "string — Unique user identifier",
+        "email": "string",
+        "displayName": "string",
+        "tenants": {
+          "_description": "Map of tenantId → access config",
+          "[tenantId]": {
+            "role": "string — admin | manager | operator | viewer",
+            "modules": "array<string> — Module IDs this user can access within this tenant",
+            "joinedAt": "timestamp"
+          }
+        },
+        "createdAt": "timestamp",
+        "lastLoginAt": "timestamp"
+      }
+    },
+    "system_logs": {
+      "path": "SystemLogs",
+      "description": "Persisted platform logs for audit trails and historical analysis. Written in batches to minimize Firestore costs.",
+      "fields": {
+        "level": "string — debug | info | warn | error",
+        "source": "string — Component or module that generated the log",
+        "message": "string — Log message",
+        "user": "string — Email of the user who triggered the action",
+        "result": "string — success | failure | pending",
+        "data": "map — Optional structured data",
+        "sessionId": "string — Browser session identifier",
+        "apiUrl": "string — (API logs) Full request URL/path",
+        "apiMethod": "string — (API logs) HTTP method: GET | POST | PUT | DELETE",
+        "apiStatusCode": "number — (API logs) HTTP response status code",
+        "apiResponseTimeMs": "number — (API logs) Response time in milliseconds",
+        "apiRequestPayload": "map — (API logs) Request body/params sent",
+        "apiResponsePayload": "map — (API logs) Response data received",
+        "createdAt": "timestamp",
+        "_batchId": "string — ID of the batch this log was flushed in"
+      }
+    },
+    "system_config": {
+      "path": "SystemConfig",
+      "description": "Platform-wide configuration stored in the database (logging settings, feature flags, etc.)",
+      "fields": {
+        "configKey": "string — Unique config identifier",
+        "value": "any — Configuration value",
+        "updatedBy": "string — Admin who last modified",
+        "updatedAt": "timestamp"
+      }
+    }
+  },
+
+  "module_collections": {
+    "_description": "Each module stores its data under the tenant's subcollection: platforms/knowvana/Tenants/{tenantId}/{ModuleCollection}",
+    "ops_monitor": {
+      "tasks": {
+        "path": "Tasks",
+        "fields": {
+          "taskId": "string",
+          "taskName": "string",
+          "category": "string",
+          "cron_schedule": "string",
+          "addedByProcess": "string",
+          "addedByUser": "string",
+          "createdAt": "timestamp"
+        }
+      }
+    },
+    "shift_roster": {
+      "shifts": {
+        "path": "Shifts",
+        "fields": {
+          "shiftId": "string",
+          "name": "string",
+          "startTime": "string",
+          "endTime": "string",
+          "assignedUsers": "array<string>"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "_schema": "AppConfig — Global application metadata. Read at startup to configure branding, version display, and feature flags.",
+  "appName": "Operations Manager",
+  "appVersion": "1.0.0",
+  "company": "Knowvana",
+  "description": "Modular Enterprise Operations Management Platform",
+  "support": {
+    "email": "support@knowvana.com",
+    "documentation": "https://docs.knowvana.com",
+    "website": "https://knowvana.com"
+  },
+  "availableModules": [
+    {
+      "id": "ops_monitor",
+      "name": "Operations Monitor",
+      "description": "Real-time operations monitoring with shift-based task management",
+      "version": "1.0.0"
+    },
+    {
+      "id": "shift_roster",
+      "name": "Shift Roster Planner",
+      "description": "Workforce scheduling and roster management",
+      "version": "1.0.0"
+    }
+  ],
+  "defaultTenantPlan": {
+    "plan": "trial",
+    "maxUsers": 5,
+    "trialDays": 14
+  }
+}

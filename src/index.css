@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================================
+   Global Styles — Operations Manager Platform
+   
+   ARCHITECTURE NOTE:
+   This file contains ONLY base-level resets and global styles.
+   Component-specific styles use Tailwind utility classes inline.
+   Theme tokens are defined in tailwind.config.js.
+   ============================================================================ */
+
+@layer base {
+  body {
+    @apply bg-surface-50 text-surface-800 font-sans;
+  }
+
+  /* Smooth scrolling for the entire app */
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* Custom scrollbar — subtle, matches the calm theme */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-surface-300 rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-surface-400;
+  }
+}
+
+@layer utilities {
+  /* Gradient text utility */
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+  }
+}
