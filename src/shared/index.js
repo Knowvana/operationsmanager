@@ -24,6 +24,8 @@ export { default as ProgressModal } from './components/ProgressModal';
 export { default as SuccessModal } from './components/SuccessModal';
 export { default as ErrorModal } from './components/ErrorModal';
 export { default as ConfirmationModal } from './components/ConfirmationModal';
+export { default as CreateTenantForm } from './components/CreateTenantForm';
+export { default as StepWizard } from './components/wizards/StepWizard';
 
 // --- Layouts ---
 export { default as AppShell } from './layouts/AppShell';
@@ -36,6 +38,7 @@ export { default as RightPanel } from './layouts/RightPanel';
 export { default as Logger } from './services/logger';
 export { default as AuthService } from './services/authService';
 export { default as PlatformService } from './services/platformService';
+export { default as UserService } from './services/userService';
 
 // --- Hooks (added as we build them) ---
 // export { default as useConfirmAction } from './hooks/useConfirmAction';

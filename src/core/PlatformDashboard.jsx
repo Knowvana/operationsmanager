@@ -1012,6 +1012,7 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
       activeModuleId={null}
       onSwitchModule={() => {}}
       onLogout={onLogout}
+      onSystemAdmin={() => setActiveView('overview')}
       user={user}
       sideNavTitle="Administration"
       sideNavItems={ADMIN_NAV_ITEMS}

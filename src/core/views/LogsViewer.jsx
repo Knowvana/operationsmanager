@@ -7,12 +7,12 @@
 // API Logs: Method, URL, Status Code, Response Time, User, Payloads
 // Both have filtering, search, detail panel, real-time updates.
 // ============================================================================
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Logger, Card, Button, PageHeader } from '@shared';
 import {
   ScrollText, Search, Filter, Trash2, RefreshCw,
   X, Clock, Tag, Globe, User, CheckCircle2,
-  XCircle, ArrowRightLeft
+  XCircle, ArrowRightLeft, ArrowUp, ArrowDown, GripVertical
 } from 'lucide-react';
 
 const LEVEL_CONFIG = {
@@ -29,24 +29,74 @@ const RESULT_CONFIG = {
   pending: { color: 'text-surface-400', bg: 'bg-surface-50' },
 };
 
-// Maps log source strings to user-friendly page/component names.
+// Maps log source strings to the actual rendered component name in the UI.
 // Add entries here as new components start logging.
 const SOURCE_TO_COMPONENT = {
-  'Overview':        'Dashboard',
-  'Navigation':      'Dashboard',
-  'Settings':        'Settings',
-  'Platform':        'Platform Setup',
-  'PlatformService': 'Platform Service',
-  'Auth':            'Authentication',
-  'Firebase':        'Firebase',
-  'API':             'API Layer',
-  'Logger':          'Logging Config',
-  'System':          'System',
-  'Tenants':         'Tenant Mgmt',
-  'Modules':         'Module Registry',
-  'Users':           'User Mgmt',
-  'Security':        'Security',
+  'Overview':        'PlatformOverview',
+  'Navigation':      'PlatformDashboard',
+  'Settings':        'PlatformSettings',
+  'Platform':        'DatabaseSetupWizard',
+  'PlatformService': 'PlatformService',
+  'Auth':            'SystemAdminLogin',
+  'Firebase':        'FirebaseService',
+  'API':             'APILayer',
+  'Logger':          'LoggerService',
+  'System':          'SystemCore',
+  'Tenants':         'TenantManagement',
+  'Modules':         'ModuleRegistry',
+  'Users':           'UserManagement',
+  'Security':        'SecuritySettings',
+  'Database':        'DatabaseSetupWizard',
+  'App':             'App',
 };
+
+// --- Sort value extraction for any column ---
+function getSortValue(log, colId, tab) {
+  if (tab === 'system') {
+    switch (colId) {
+      case 'level': return log.level || '';
+      case 'time': return log.timestamp || '';
+      case 'component': return SOURCE_TO_COMPONENT[log.source] || log.source || '';
+      case 'source': return log.source || '';
+      case 'user': return log.user || '';
+      case 'message': return log.message || '';
+      case 'result': return log.result || '';
+      default: return '';
+    }
+  } else {
+    switch (colId) {
+      case 'method': return log.method || '';
+      case 'url': return log.url || '';
+      case 'status': return log.statusCode || 0;
+      case 'respTime': return log.durationMs || 0;
+      case 'timestamp': return log.timestamp || '';
+      case 'user': return log.user || '';
+      case 'result': return log.success ? 1 : 0;
+      default: return '';
+    }
+  }
+}
+
+// --- Column Definitions ---
+const SYSTEM_COLUMNS = [
+  { id: 'level', label: 'Level', width: 70, minWidth: 50 },
+  { id: 'time', label: 'Time', width: 95, minWidth: 70 },
+  { id: 'component', label: 'Component', width: 130, minWidth: 80 },
+  { id: 'source', label: 'Source', width: 90, minWidth: 60 },
+  { id: 'user', label: 'User', width: 120, minWidth: 70 },
+  { id: 'message', label: 'Message', width: 0, minWidth: 100 },
+  { id: 'result', label: 'Result', width: 75, minWidth: 50 },
+];
+
+const API_COLUMNS = [
+  { id: 'method', label: 'Method', width: 75, minWidth: 50 },
+  { id: 'url', label: 'API URL', width: 0, minWidth: 120 },
+  { id: 'status', label: 'Status', width: 70, minWidth: 50 },
+  { id: 'respTime', label: 'Resp Time', width: 95, minWidth: 60 },
+  { id: 'timestamp', label: 'Timestamp', width: 95, minWidth: 70 },
+  { id: 'user', label: 'User', width: 120, minWidth: 70 },
+  { id: 'result', label: 'Result', width: 65, minWidth: 50 },
+];
 
 export default function LogsViewer() {
   const [activeTab, setActiveTab] = useState('system');
@@ -57,6 +107,16 @@ export default function LogsViewer() {
   const [sourceFilter, setSourceFilter] = useState('all');
   const [selectedLog, setSelectedLog] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
+
+  // --- Interactive column state ---
+  const [sysColOrder, setSysColOrder] = useState(SYSTEM_COLUMNS.map(c => c.id));
+  const [apiColOrder, setApiColOrder] = useState(API_COLUMNS.map(c => c.id));
+  const [sysColWidths, setSysColWidths] = useState(() => Object.fromEntries(SYSTEM_COLUMNS.map(c => [c.id, c.width])));
+  const [apiColWidths, setApiColWidths] = useState(() => Object.fromEntries(API_COLUMNS.map(c => [c.id, c.width])));
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: 'desc' });
+  const [dragCol, setDragCol] = useState(null);
+  const [dragOverCol, setDragOverCol] = useState(null);
+  const resizeRef = useRef(null);
 
   useEffect(() => {
     const refresh = () => {
@@ -77,7 +137,7 @@ export default function LogsViewer() {
 
   const filteredLogs = useMemo(() => {
     const source = activeTab === 'system' ? logs : apiLogs;
-    return source.filter((log) => {
+    let filtered = source.filter((log) => {
       if (activeTab === 'system') {
         if (levelFilter !== 'all' && log.level !== levelFilter) return false;
         if (sourceFilter !== 'all' && log.source !== sourceFilter) return false;
@@ -91,7 +151,18 @@ export default function LogsViewer() {
       }
       return true;
     });
-  }, [logs, apiLogs, activeTab, levelFilter, sourceFilter, searchText]);
+    // Apply sort
+    if (sortConfig.key) {
+      filtered = [...filtered].sort((a, b) => {
+        const valA = getSortValue(a, sortConfig.key, activeTab);
+        const valB = getSortValue(b, sortConfig.key, activeTab);
+        if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+    return filtered;
+  }, [logs, apiLogs, activeTab, levelFilter, sourceFilter, searchText, sortConfig]);
 
   const handleClear = useCallback(() => {
     if (activeTab === 'system') {
@@ -103,6 +174,123 @@ export default function LogsViewer() {
   }, [activeTab]);
 
   const flushCount = Logger.getFlushBufferSize();
+
+  // Current tab's column config
+  const colDefs = activeTab === 'system' ? SYSTEM_COLUMNS : API_COLUMNS;
+  const colOrder = activeTab === 'system' ? sysColOrder : apiColOrder;
+  const setColOrder = activeTab === 'system' ? setSysColOrder : setApiColOrder;
+  const colWidths = activeTab === 'system' ? sysColWidths : apiColWidths;
+  const setColWidths = activeTab === 'system' ? setSysColWidths : setApiColWidths;
+  const orderedCols = colOrder.map(id => colDefs.find(c => c.id === id)).filter(Boolean);
+
+  // --- Sort handler ---
+  const handleSort = useCallback((colId) => {
+    setSortConfig(prev => ({
+      key: colId,
+      direction: prev.key === colId && prev.direction === 'asc' ? 'desc' : 'asc',
+    }));
+  }, []);
+
+  // --- Drag-drop reorder handlers ---
+  const handleDragStart = useCallback((colId) => { setDragCol(colId); }, []);
+  const handleDragOver = useCallback((e, colId) => { e.preventDefault(); setDragOverCol(colId); }, []);
+  const handleDrop = useCallback((targetColId) => {
+    if (!dragCol || dragCol === targetColId) { setDragCol(null); setDragOverCol(null); return; }
+    setColOrder(prev => {
+      const newOrder = [...prev];
+      const fromIdx = newOrder.indexOf(dragCol);
+      const toIdx = newOrder.indexOf(targetColId);
+      newOrder.splice(fromIdx, 1);
+      newOrder.splice(toIdx, 0, dragCol);
+      return newOrder;
+    });
+    setDragCol(null);
+    setDragOverCol(null);
+  }, [dragCol, setColOrder]);
+  const handleDragEnd = useCallback(() => { setDragCol(null); setDragOverCol(null); }, []);
+
+  // --- Resize handlers ---
+  const handleResizeStart = useCallback((e, colId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startWidth = colWidths[colId] || 100;
+    const minW = colDefs.find(c => c.id === colId)?.minWidth || 40;
+    const onMouseMove = (ev) => {
+      const diff = ev.clientX - startX;
+      const newW = Math.max(minW, startWidth + diff);
+      setColWidths(prev => ({ ...prev, [colId]: newW }));
+    };
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }, [colWidths, colDefs, setColWidths]);
+
+  // --- Cell content renderer for both system and API tables ---
+  const renderCellContent = useCallback((log, colId, tab) => {
+    if (tab === 'system') {
+      switch (colId) {
+        case 'level': {
+          const lc = LEVEL_CONFIG[log.level] || LEVEL_CONFIG.info;
+          return <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-bold ${lc.bg} ${lc.color}`}>{lc.label}</span>;
+        }
+        case 'time':
+          return <span className="font-mono text-surface-400 text-xs">{log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : '—'}</span>;
+        case 'component': {
+          const comp = SOURCE_TO_COMPONENT[log.source] || log.source || '—';
+          return <span className="inline-block px-1.5 py-0.5 rounded bg-brand-50 text-brand-600 font-semibold text-xs">{comp}</span>;
+        }
+        case 'source':
+          return <span className="inline-block px-1.5 py-0.5 rounded bg-surface-100 text-surface-600 font-semibold text-xs">{log.source}</span>;
+        case 'user':
+          return <span className="text-surface-500 text-xs">{log.user || '—'}</span>;
+        case 'message':
+          return <span className="text-surface-700">{log.message}</span>;
+        case 'result': {
+          const rc = RESULT_CONFIG[log.result] || RESULT_CONFIG.pending;
+          return <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-bold ${rc.bg} ${rc.color}`}>{log.result || '—'}</span>;
+        }
+        default: return '—';
+      }
+    } else {
+      switch (colId) {
+        case 'method':
+          return (
+            <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-bold ${
+              log.method === 'GET' ? 'bg-blue-50 text-blue-600' :
+              log.method === 'POST' ? 'bg-emerald-50 text-emerald-600' :
+              log.method === 'PUT' ? 'bg-amber-50 text-amber-600' :
+              log.method === 'DELETE' ? 'bg-rose-50 text-rose-600' :
+              'bg-surface-100 text-surface-500'
+            }`}>{log.method}</span>
+          );
+        case 'url':
+          return <span className="font-mono text-surface-600 text-xs">{log.url}</span>;
+        case 'status': {
+          const ok = log.success;
+          return <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-bold ${ok ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>{log.statusCode}</span>;
+        }
+        case 'respTime':
+          return <span className="font-mono text-surface-500 text-xs">{log.durationMs}ms</span>;
+        case 'timestamp':
+          return <span className="font-mono text-surface-400 text-xs">{log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : '—'}</span>;
+        case 'user':
+          return <span className="text-surface-500 text-xs">{log.user || '—'}</span>;
+        case 'result':
+          return log.success
+            ? <CheckCircle2 size={15} className="text-emerald-500" />
+            : <XCircle size={15} className="text-rose-500" />;
+        default: return '—';
+      }
+    }
+  }, []);
 
   return (
     <div className="animate-fade-in h-full flex flex-col">
@@ -214,98 +402,66 @@ export default function LogsViewer() {
               <ScrollText size={32} className="mb-3" />
               <p className="text-sm font-medium">No {activeTab === 'system' ? 'logs' : 'API calls'} match your filters</p>
             </div>
-          ) : activeTab === 'system' ? (
-            <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-surface-50 z-10">
-                <tr className="border-b border-surface-200">
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-16">Level</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-24">Time</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-24">Component</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-20">Source</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-28">User</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500">Message</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-18">Result</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredLogs.map((log) => {
-                  const lc = LEVEL_CONFIG[log.level] || LEVEL_CONFIG.info;
-                  const rc = RESULT_CONFIG[log.result] || RESULT_CONFIG.pending;
-                  const isSelected = selectedLog?.id === log.id;
-                  // Derive component name from source for user-friendly display
-                  const component = SOURCE_TO_COMPONENT[log.source] || log.source || '—';
-                  return (
-                    <tr key={log.id} onClick={() => setSelectedLog(isSelected ? null : log)}
-                      className={`border-b border-surface-50 cursor-pointer transition-colors ${isSelected ? 'bg-brand-50/50' : 'hover:bg-surface-50'}`}>
-                      <td className="px-3 py-2">
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-bold ${lc.bg} ${lc.color}`}>{lc.label}</span>
-                      </td>
-                      <td className="px-3 py-2 font-mono text-surface-400 text-xs">
-                        {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : '—'}
-                      </td>
-                      <td className="px-3 py-2">
-                        <span className="inline-block px-1.5 py-0.5 rounded bg-brand-50 text-brand-600 font-semibold text-xs">{component}</span>
-                      </td>
-                      <td className="px-3 py-2">
-                        <span className="inline-block px-1.5 py-0.5 rounded bg-surface-100 text-surface-600 font-semibold text-xs">{log.source}</span>
-                      </td>
-                      <td className="px-3 py-2 text-surface-500 truncate max-w-[140px] text-xs">{log.user || '—'}</td>
-                      <td className="px-3 py-2 text-surface-700 truncate max-w-[300px]">{log.message}</td>
-                      <td className="px-3 py-2">
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-bold ${rc.bg} ${rc.color}`}>{log.result || '—'}</span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
           ) : (
-            /* API Logs Table — shows URL, Method, Status, Response Time, User, Result */
-            <table className="w-full text-sm">
+            <table className="w-full text-sm" style={{ tableLayout: 'fixed' }}>
               <thead className="sticky top-0 bg-surface-50 z-10">
                 <tr className="border-b border-surface-200">
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-18">Method</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500">API URL</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-18">Status</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-24">Resp Time</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-24">Timestamp</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-28">User</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-surface-500 w-18">Result</th>
+                  {orderedCols.map((col) => {
+                    const w = colWidths[col.id];
+                    const isSorted = sortConfig.key === col.id;
+                    const isDragTarget = dragOverCol === col.id && dragCol !== col.id;
+                    return (
+                      <th
+                        key={col.id}
+                        draggable
+                        onDragStart={() => handleDragStart(col.id)}
+                        onDragOver={(e) => handleDragOver(e, col.id)}
+                        onDrop={() => handleDrop(col.id)}
+                        onDragEnd={handleDragEnd}
+                        onClick={() => handleSort(col.id)}
+                        className={`
+                          text-left px-3 py-2.5 font-semibold text-surface-500 select-none relative group
+                          ${dragCol === col.id ? 'opacity-40' : ''}
+                          ${isDragTarget ? 'bg-brand-50' : ''}
+                        `}
+                        style={w > 0 ? { width: w, minWidth: col.minWidth } : { minWidth: col.minWidth }}
+                      >
+                        <div className="flex items-center gap-1 cursor-pointer">
+                          <GripVertical size={10} className="text-surface-300 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 cursor-grab" />
+                          <span className="truncate">{col.label}</span>
+                          {isSorted && (
+                            sortConfig.direction === 'asc'
+                              ? <ArrowUp size={11} className="text-brand-500 flex-shrink-0" />
+                              : <ArrowDown size={11} className="text-brand-500 flex-shrink-0" />
+                          )}
+                        </div>
+                        {/* Resize handle */}
+                        {w > 0 && (
+                          <div
+                            onMouseDown={(e) => handleResizeStart(e, col.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-brand-300 transition-colors z-20"
+                          />
+                        )}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
                 {filteredLogs.map((log) => {
                   const isSelected = selectedLog?.id === log.id;
-                  const isSuccess = log.success;
                   return (
-                    <tr key={log.id} onClick={() => setSelectedLog(isSelected ? null : log)}
-                      className={`border-b border-surface-50 cursor-pointer transition-colors ${isSelected ? 'bg-brand-50/50' : 'hover:bg-surface-50'}`}>
-                      <td className="px-3 py-2">
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-bold ${
-                          log.method === 'GET' ? 'bg-blue-50 text-blue-600' :
-                          log.method === 'POST' ? 'bg-emerald-50 text-emerald-600' :
-                          log.method === 'PUT' ? 'bg-amber-50 text-amber-600' :
-                          log.method === 'DELETE' ? 'bg-rose-50 text-rose-600' :
-                          'bg-surface-100 text-surface-500'
-                        }`}>{log.method}</span>
-                      </td>
-                      <td className="px-3 py-2 font-mono text-surface-600 truncate max-w-[300px] text-xs">{log.url}</td>
-                      <td className="px-3 py-2">
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-bold ${isSuccess ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
-                          {log.statusCode}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 font-mono text-surface-500 text-xs">{log.durationMs}ms</td>
-                      <td className="px-3 py-2 font-mono text-surface-400 text-xs">
-                        {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : '—'}
-                      </td>
-                      <td className="px-3 py-2 text-surface-500 truncate max-w-[120px] text-xs">{log.user || '—'}</td>
-                      <td className="px-3 py-2">
-                        {isSuccess
-                          ? <CheckCircle2 size={15} className="text-emerald-500" />
-                          : <XCircle size={15} className="text-rose-500" />
-                        }
-                      </td>
+                    <tr
+                      key={log.id}
+                      onClick={() => setSelectedLog(isSelected ? null : log)}
+                      className={`border-b border-surface-50 cursor-pointer transition-colors ${isSelected ? 'bg-brand-50/50' : 'hover:bg-surface-50'}`}
+                    >
+                      {orderedCols.map((col) => (
+                        <td key={col.id} className="px-3 py-2 overflow-hidden text-ellipsis whitespace-nowrap">
+                          {renderCellContent(log, col.id, activeTab)}
+                        </td>
+                      ))}
                     </tr>
                   );
                 })}

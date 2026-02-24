@@ -2,28 +2,25 @@
 // TenantLogin — The default login screen for tenant users.
 //
 // ARCHITECTURE NOTE:
-// Same shared LoginForm, different auth handler.
-// When Firebase is configured, this will call Firebase Auth.
-// For now, it shows a friendly message that the platform is being set up.
+// Authenticates against the Firestore Users collection via UserService.
+// Users register via the UserRegistrationWizard and log in here.
+// Password is verified against the bcrypt hash stored in Firestore.
 //
 // Route: / (default)
 // ============================================================================
 import React from 'react';
 import { Layers } from 'lucide-react';
 import { LoginForm, Logger } from '@shared';
+import UserService from '../../shared/services/userService';
 
-export default function TenantLogin({ onLogin, appName = 'Operations Manager' }) {
+export default function TenantLogin({ onLogin, onRegister, appName = 'Operations Manager' }) {
 
-  // Auth handler: will use Firebase Auth once configured
+  // Auth handler: authenticate against Firestore Users collection
   const handleTenantLogin = async (email, password) => {
     Logger.info('Auth', 'Tenant login attempt', { email });
-    // TODO: Replace with Firebase Auth when database is configured
-    // const user = await signInWithEmailAndPassword(auth, email, password);
-    // onLogin(user);
-    Logger.warn('Auth', 'Tenant login unavailable — platform not yet configured', { email });
-    throw new Error(
-      'Tenant login is not yet available. The platform is being set up by the administrator.'
-    );
+    const user = await UserService.authenticateUser(email, password);
+    Logger.info('Auth', 'Tenant login successful', { email, userId: user.userId });
+    onLogin(user);
   };
 
   return (
@@ -34,6 +31,19 @@ export default function TenantLogin({ onLogin, appName = 'Operations Manager' })
       subtitle="Enter your credentials to access your workspace"
       icon={Layers}
       accentColor="brand"
+      footerHint={
+        onRegister ? (
+          <>
+            Don't have an account?{' '}
+            <button
+              onClick={onRegister}
+              className="text-brand-600 font-semibold hover:text-brand-700 transition-colors"
+            >
+              Register here
+            </button>
+          </>
+        ) : null
+      }
     />
   );
 }

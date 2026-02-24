@@ -18,23 +18,20 @@ export default function TopNav({
   onSwitchModule,
   onOpenSettings,
   onLogout,
+  onSystemAdmin,
+  onRegister,
   user,
   onToggleRightPanel,
   isRightPanelOpen = false,
 }) {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
   const menuRef = useRef(null);
-  const adminMenuRef = useRef(null);
 
-  // Close dropdowns when clicking outside
+  // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (menuRef.current && !menuRef.current.contains(e.target)) {
         setIsUserMenuOpen(false);
-      }
-      if (adminMenuRef.current && !adminMenuRef.current.contains(e.target)) {
-        setIsAdminMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -59,56 +56,26 @@ export default function TopNav({
               <span className="text-sm font-bold text-surface-800 hidden sm:block">{appName}</span>
             </div>
 
-            {/* System Admin Menu — formal dropdown for system admins */}
+            {/* System Admin — simple navigation button */}
             {user?.isSystemAdmin && (
-              <div className="relative" ref={adminMenuRef}>
-                <button
-                  onClick={() => setIsAdminMenuOpen(!isAdminMenuOpen)}
-                  className={`
-                    flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold
-                    transition-all duration-200 border
-                    ${isAdminMenuOpen
-                      ? 'bg-amber-50 text-amber-700 border-amber-300 shadow-sm'
-                      : 'text-surface-600 border-transparent hover:bg-surface-50 hover:border-surface-200'
-                    }
-                  `}
-                >
-                  <Shield size={14} className={isAdminMenuOpen ? 'text-amber-600' : 'text-surface-400'} />
-                  <span className="hidden sm:inline">System Admin</span>
-                  <ChevronDown size={13} className={`transition-transform ${isAdminMenuOpen ? 'rotate-180 text-amber-500' : 'text-surface-400'}`} />
-                </button>
+              <button
+                onClick={onSystemAdmin}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all duration-200 border text-surface-600 border-transparent hover:bg-amber-50 hover:text-amber-700 hover:border-amber-200"
+              >
+                <Shield size={14} className="text-amber-500" />
+                <span className="hidden sm:inline">System Admin</span>
+              </button>
+            )}
 
-                {isAdminMenuOpen && (
-                  <div className="absolute left-0 top-full mt-1.5 w-52 bg-white rounded-xl border border-surface-200 shadow-xl shadow-surface-200/50 py-1.5 animate-slide-up z-50">
-                    <div className="px-3 py-2 border-b border-surface-100">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-surface-400">Administration</p>
-                    </div>
-                    <button
-                      onClick={() => { setIsAdminMenuOpen(false); onOpenSettings?.(); }}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-surface-700 hover:bg-surface-50 transition-colors"
-                    >
-                      <Settings size={14} className="text-surface-400" />
-                      Platform Settings
-                    </button>
-                    <button
-                      className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-surface-400 cursor-default"
-                      disabled
-                    >
-                      <Shield size={14} />
-                      Access Control
-                      <span className="ml-auto text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-surface-100 text-surface-400">Soon</span>
-                    </button>
-                    <button
-                      className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-surface-400 cursor-default"
-                      disabled
-                    >
-                      <User size={14} />
-                      Audit Log
-                      <span className="ml-auto text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-surface-100 text-surface-400">Soon</span>
-                    </button>
-                  </div>
-                )}
-              </div>
+            {/* Register — visible when not logged in */}
+            {!user && onRegister && (
+              <button
+                onClick={onRegister}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all duration-200 border text-brand-600 border-transparent hover:bg-brand-50 hover:border-brand-200"
+              >
+                <User size={14} />
+                <span className="hidden sm:inline">Register</span>
+              </button>
             )}
 
             {/* Module Tabs */}

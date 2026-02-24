@@ -20,19 +20,12 @@ import {
   Database, CheckCircle2, AlertCircle, ArrowRight,
   Wifi, WifiOff, Loader2, Server, RefreshCw
 } from 'lucide-react';
-import { Button, Card, Input, ActionModal, Logger, AuthService } from '@shared';
+import { Button, Card, Input, StepWizard, Logger, AuthService } from '@shared';
 import firebaseConfig from '@config/firebase.json';
 import databaseSchema from '@config/database-schema.json';
 import defaultData from '@config/default-data.json';
 
-const STEPS = [
-  { id: 'config', label: 'Firebase Config', icon: Server },
-  { id: 'test', label: 'Test Connection', icon: Wifi },
-  { id: 'initialize', label: 'Initialize DB', icon: Database },
-];
-
 export default function DatabaseSetupWizard({ isOpen, onClose, onComplete }) {
-  const [currentStep, setCurrentStep] = useState(0);
   const [databaseName, setDatabaseName] = useState(databaseSchema.root_document || 'Knowvana');
   const [config, setConfig] = useState({
     apiKey: firebaseConfig.apiKey || '',
@@ -178,7 +171,7 @@ export default function DatabaseSetupWizard({ isOpen, onClose, onComplete }) {
 
   // --- Step Content Renderers ---
 
-  const renderStepConfig = () => (
+  const renderStepConfig = ({ onNext }) => (
     <div className="space-y-4 animate-fade-in">
       <p className="text-sm text-surface-500 mb-4">
         Configure your database name and Firebase credentials. The database name is the root collection under which all platform data will be stored.
@@ -206,14 +199,14 @@ export default function DatabaseSetupWizard({ isOpen, onClose, onComplete }) {
       <Input label="Storage Bucket" value={config.storageBucket} onChange={(v) => handleConfigChange('storageBucket', v)} placeholder="your-project.appspot.com" />
       <Input label="App ID" value={config.appId} onChange={(v) => handleConfigChange('appId', v)} placeholder="1:123:web:abc" />
       <div className="flex items-center justify-end pt-2">
-        <Button onClick={() => setCurrentStep(1)} iconRight={<ArrowRight size={16} />}>
+        <Button onClick={onNext} iconRight={<ArrowRight size={16} />}>
           Next: Test Connection
         </Button>
       </div>
     </div>
   );
 
-  const renderStepTest = () => (
+  const renderStepTest = ({ onNext, onBack }) => (
     <div className="space-y-6 animate-fade-in">
       <p className="text-sm text-surface-500">
         Test the connection to your Firebase project before initializing the database.
@@ -249,7 +242,7 @@ export default function DatabaseSetupWizard({ isOpen, onClose, onComplete }) {
       </Card>
 
       <div className="flex items-center justify-between">
-        <Button variant="secondary" onClick={() => setCurrentStep(0)}>Back</Button>
+        <Button variant="secondary" onClick={onBack}>Back</Button>
         {connectionStatus !== 'success' ? (
           <Button
             onClick={handleTestConnection}
@@ -259,7 +252,7 @@ export default function DatabaseSetupWizard({ isOpen, onClose, onComplete }) {
             {connectionStatus === 'error' ? 'Retry' : 'Test Connection'}
           </Button>
         ) : (
-          <Button onClick={() => setCurrentStep(2)} iconRight={<ArrowRight size={16} />}>
+          <Button onClick={onNext} iconRight={<ArrowRight size={16} />}>
             Next: Initialize Database
           </Button>
         )}
@@ -269,7 +262,7 @@ export default function DatabaseSetupWizard({ isOpen, onClose, onComplete }) {
 
   const progressPercent = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
 
-  const renderStepInitialize = () => (
+  const renderStepInitialize = ({ onBack }) => (
     <div className="space-y-6 animate-fade-in">
       <p className="text-sm text-surface-500">
         This will create collections from your schema and seed default data (admin user, config, initial log entry).
@@ -340,7 +333,7 @@ export default function DatabaseSetupWizard({ isOpen, onClose, onComplete }) {
       )}
 
       <div className="flex items-center justify-between">
-        <Button variant="secondary" onClick={() => setCurrentStep(1)} disabled={initStatus === 'initializing'}>Back</Button>
+        <Button variant="secondary" onClick={onBack} disabled={initStatus === 'initializing'}>Back</Button>
         {initStatus !== 'success' ? (
           <Button
             variant="success"
@@ -359,46 +352,23 @@ export default function DatabaseSetupWizard({ isOpen, onClose, onComplete }) {
     </div>
   );
 
+  // Step definitions for the reusable StepWizard
+  const wizardSteps = [
+    { id: 'config', label: 'Firebase Config', icon: Server, content: renderStepConfig },
+    { id: 'test', label: 'Test Connection', icon: Wifi, content: renderStepTest },
+    { id: 'initialize', label: 'Initialize DB', icon: Database, content: renderStepInitialize },
+  ];
+
   return (
-    <ActionModal
+    <StepWizard
       isOpen={isOpen}
       onClose={onClose}
       title="Database Setup"
       subtitle="Configure and initialize your Firebase database"
       icon={Database}
       size="lg"
-      variant="wizard"
-    >
-      {/* Step Indicator */}
-      <div className="flex items-center justify-center gap-2 mb-6">
-        {STEPS.map((step, idx) => {
-          const StepIcon = step.icon;
-          const isActive = idx === currentStep;
-          const isComplete = idx < currentStep || (idx === 2 && initStatus === 'success');
-          return (
-            <React.Fragment key={step.id}>
-              {idx > 0 && (
-                <div className={`w-10 h-0.5 rounded ${isComplete ? 'bg-brand-400' : 'bg-surface-200'}`} />
-              )}
-              <div className={`
-                flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold
-                transition-all duration-300
-                ${isActive ? 'bg-brand-50 text-brand-700 ring-2 ring-brand-200' : ''}
-                ${isComplete && !isActive ? 'bg-emerald-50 text-emerald-700' : ''}
-                ${!isActive && !isComplete ? 'text-surface-400' : ''}
-              `}>
-                {isComplete && !isActive ? <CheckCircle2 size={13} /> : <StepIcon size={13} />}
-                <span className="hidden sm:inline">{step.label}</span>
-              </div>
-            </React.Fragment>
-          );
-        })}
-      </div>
-
-      {/* Step Content */}
-      {currentStep === 0 && renderStepConfig()}
-      {currentStep === 1 && renderStepTest()}
-      {currentStep === 2 && renderStepInitialize()}
-    </ActionModal>
+      steps={wizardSteps}
+      onComplete={handleComplete}
+    />
   );
 }

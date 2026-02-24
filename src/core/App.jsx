@@ -7,11 +7,12 @@
 //
 // Routing strategy (no router library needed yet):
 //   URL /admin-setup  → SystemAdminLogin  (JSON-based auth)
-//   URL /             → TenantLogin       (Firebase auth, future)
+//   URL /register     → UserRegistrationWizard (self-service registration)
+//   URL /             → TenantLogin       (Firestore-based auth)
 //
 // After login:
 //   System Admin → PlatformDashboard (with DB Setup Wizard as modal)
-//   Tenant User  → Module Shell (future)
+//   Tenant User  → ComingSoon (placeholder until modules are built)
 //
 // WHY URL-based login?
 //   - Tenant users should NEVER see the admin login page
@@ -23,12 +24,15 @@ import { Logger, PlatformService } from '@shared';
 import SystemAdminLogin from './auth/SystemAdminLogin';
 import TenantLogin from './auth/TenantLogin';
 import PlatformDashboard from './PlatformDashboard';
+import ComingSoon from './views/ComingSoon';
+import UserRegistrationWizard from './setup/UserRegistrationWizard';
 import appConfig from '@config/app.json';
 
 export default function App() {
   // --- Application State ---
   const [user, setUser] = useState(null);
   const [isDatabaseReady, setIsDatabaseReady] = useState(false);
+  const [showRegistration, setShowRegistration] = useState(false);
 
   // Check if database is already initialized on app mount
   useEffect(() => {
@@ -52,9 +56,16 @@ export default function App() {
   }, []);
 
   // Determine login mode from URL path
-  const isAdminSetupRoute = useMemo(() => {
-    return window.location.pathname === '/admin-setup';
-  }, []);
+  const currentPath = useMemo(() => window.location.pathname, []);
+  const isAdminSetupRoute = currentPath === '/admin-setup';
+  const isRegisterRoute = currentPath === '/register';
+
+  // Auto-open registration wizard on /register route
+  useEffect(() => {
+    if (isRegisterRoute && !user) {
+      setShowRegistration(true);
+    }
+  }, [isRegisterRoute, user]);
 
   // --- Auth Handlers ---
   const handleLogin = useCallback((authenticatedUser) => {
@@ -74,28 +85,48 @@ export default function App() {
     setIsDatabaseReady(true);
   }, []);
 
+  // Registration complete: auto-login the newly created user
+  const handleRegistrationComplete = useCallback((registeredUser) => {
+    setShowRegistration(false);
+    setUser(registeredUser);
+    Logger.setUser(registeredUser.email);
+    Logger.info('App', 'User registered and auto-logged in', { email: registeredUser.email, userId: registeredUser.userId });
+  }, []);
+
+  const handleOpenRegistration = useCallback(() => {
+    setShowRegistration(true);
+  }, []);
+
   // --- Render Decision Tree ---
 
   // Gate 1: Not authenticated → Show appropriate login screen
   if (!user) {
-    if (isAdminSetupRoute) {
-      return (
-        <SystemAdminLogin
-          onLogin={handleLogin}
-          appName={appConfig.appName}
-        />
-      );
-    }
     return (
-      <TenantLogin
-        onLogin={handleLogin}
-        appName={appConfig.appName}
-      />
+      <>
+        {isAdminSetupRoute ? (
+          <SystemAdminLogin
+            onLogin={handleLogin}
+            appName={appConfig.appName}
+          />
+        ) : (
+          <TenantLogin
+            onLogin={handleLogin}
+            onRegister={handleOpenRegistration}
+            appName={appConfig.appName}
+          />
+        )}
+
+        {/* Registration Wizard — overlays the login screen */}
+        <UserRegistrationWizard
+          isOpen={showRegistration}
+          onClose={() => setShowRegistration(false)}
+          onComplete={handleRegistrationComplete}
+        />
+      </>
     );
   }
 
   // Gate 2: System Admin authenticated → Platform Dashboard
-  // (DatabaseSetupWizard opens as modal inside PlatformDashboard)
   if (user.isSystemAdmin) {
     return (
       <PlatformDashboard
@@ -108,15 +139,12 @@ export default function App() {
     );
   }
 
-  // Gate 3: Tenant user authenticated → Module Shell (future)
-  // For now, show PlatformDashboard as placeholder
+  // Gate 3: Tenant user authenticated → ComingSoon (modules not built yet)
   return (
-    <PlatformDashboard
+    <ComingSoon
       user={user}
       onLogout={handleLogout}
       appName={appConfig.appName}
-      isDatabaseReady={true}
-      onDatabaseReady={() => {}}
     />
   );
 }

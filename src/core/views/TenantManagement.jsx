@@ -17,10 +17,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Building2, Plus, Search, Edit3, Trash2, X,
-  CheckCircle2, AlertTriangle, Clock, Users,
-  Package, Mail, Phone, Globe, RefreshCw
+  AlertTriangle, Package, RefreshCw
 } from 'lucide-react';
-import { Card, Button, PageHeader, ActionModal, Input, EmptyState, Logger, PlatformService } from '@shared';
+import { Card, Button, PageHeader, ActionModal, EmptyState, Logger, PlatformService, CreateTenantForm } from '@shared';
 
 const PLANS = [
   { value: 'free', label: 'Free', color: 'bg-surface-100 text-surface-600' },
@@ -35,21 +34,6 @@ const STATUSES = [
   { value: 'suspended', label: 'Suspended', color: 'bg-rose-50 text-rose-600' },
 ];
 
-const AVAILABLE_MODULES = [
-  { id: 'ops_monitor', name: 'Operations Monitor' },
-  { id: 'shift_roster', name: 'Shift Roster Planner' },
-];
-
-const EMPTY_FORM = {
-  name: '',
-  tenantId: '',
-  status: 'trial',
-  plan: 'free',
-  maxUsers: 5,
-  subscribedModules: [],
-  metadata: { industry: '', contactEmail: '', contactPhone: '' },
-};
-
 export default function TenantManagement({ isDatabaseReady }) {
   const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -58,7 +42,6 @@ export default function TenantManagement({ isDatabaseReady }) {
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [editingTenant, setEditingTenant] = useState(null);
   const [deletingTenant, setDeletingTenant] = useState(null);
-  const [formData, setFormData] = useState({ ...EMPTY_FORM });
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -93,25 +76,11 @@ export default function TenantManagement({ isDatabaseReady }) {
 
   const openCreate = () => {
     setEditingTenant(null);
-    setFormData({ ...EMPTY_FORM, tenantId: `tenant_${Date.now()}` });
     setIsFormOpen(true);
   };
 
   const openEdit = (tenant) => {
     setEditingTenant(tenant);
-    setFormData({
-      name: tenant.name || '',
-      tenantId: tenant.tenantId || tenant.id,
-      status: tenant.status || 'trial',
-      plan: tenant.plan || 'free',
-      maxUsers: tenant.maxUsers || 5,
-      subscribedModules: tenant.subscribedModules || [],
-      metadata: {
-        industry: tenant.metadata?.industry || '',
-        contactEmail: tenant.metadata?.contactEmail || '',
-        contactPhone: tenant.metadata?.contactPhone || '',
-      },
-    });
     setIsFormOpen(true);
   };
 
@@ -120,7 +89,7 @@ export default function TenantManagement({ isDatabaseReady }) {
     setIsDeleteOpen(true);
   };
 
-  const handleSave = async () => {
+  const handleSave = async (formData) => {
     setSaving(true);
     try {
       if (editingTenant) {
@@ -153,26 +122,6 @@ export default function TenantManagement({ isDatabaseReady }) {
     } finally {
       setDeleting(false);
     }
-  };
-
-  const updateForm = (field, value) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-  };
-
-  const updateMetadata = (field, value) => {
-    setFormData((prev) => ({
-      ...prev,
-      metadata: { ...prev.metadata, [field]: value },
-    }));
-  };
-
-  const toggleModule = (moduleId) => {
-    setFormData((prev) => {
-      const mods = prev.subscribedModules.includes(moduleId)
-        ? prev.subscribedModules.filter((m) => m !== moduleId)
-        : [...prev.subscribedModules, moduleId];
-      return { ...prev, subscribedModules: mods };
-    });
   };
 
   const getPlanBadge = (plan) => PLANS.find((p) => p.value === plan) || PLANS[0];
@@ -245,10 +194,9 @@ export default function TenantManagement({ isDatabaseReady }) {
             <table className="w-full text-xs">
               <thead className="bg-surface-50/80">
                 <tr className="border-b border-surface-200">
-                  <th className="text-left px-4 py-3 font-semibold text-surface-500">Organization</th>
+                  <th className="text-left px-4 py-3 font-semibold text-surface-500">Tenant</th>
                   <th className="text-left px-4 py-3 font-semibold text-surface-500 w-20">Status</th>
                   <th className="text-left px-4 py-3 font-semibold text-surface-500 w-24">Plan</th>
-                  <th className="text-left px-4 py-3 font-semibold text-surface-500 w-16">Users</th>
                   <th className="text-left px-4 py-3 font-semibold text-surface-500 w-20">Modules</th>
                   <th className="text-left px-4 py-3 font-semibold text-surface-500 w-28">Contact</th>
                   <th className="text-right px-4 py-3 font-semibold text-surface-500 w-20">Actions</th>
@@ -275,12 +223,6 @@ export default function TenantManagement({ isDatabaseReady }) {
                         <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${plan.color}`}>
                           {plan.label}
                         </span>
-                      </td>
-                      <td className="px-4 py-3 text-surface-600">
-                        <div className="flex items-center gap-1">
-                          <Users size={12} className="text-surface-400" />
-                          {tenant.maxUsers || 0}
-                        </div>
                       </td>
                       <td className="px-4 py-3 text-surface-600">
                         <div className="flex items-center gap-1">
@@ -320,181 +262,39 @@ export default function TenantManagement({ isDatabaseReady }) {
         )}
       </Card>
 
-      {/* Create/Edit Modal */}
+      {/* Create/Edit Modal — uses shared CreateTenantForm, variant=custom (no auto footer) */}
       <ActionModal
         isOpen={isFormOpen}
         onClose={() => setIsFormOpen(false)}
         title={editingTenant ? 'Edit Tenant' : 'Create Tenant'}
         icon={Building2}
-        size="lg"
+        size="xl"
+        variant="custom"
       >
-        <div className="space-y-5 py-2">
-          {/* Basic Info */}
-          <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 mb-3">Organization Details</h4>
-            <div className="space-y-3">
-              <FormField label="Organization Name" required>
-                <input
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) => updateForm('name', e.target.value)}
-                  placeholder="Acme Corporation"
-                  className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 focus:border-brand-400 transition-all"
-                />
-              </FormField>
-              <FormField label="Tenant ID" hint="Auto-generated, can be customized">
-                <input
-                  type="text"
-                  value={formData.tenantId}
-                  onChange={(e) => updateForm('tenantId', e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 focus:border-brand-400 transition-all font-mono"
-                  disabled={!!editingTenant}
-                />
-              </FormField>
-            </div>
-          </div>
-
-          {/* Separator */}
-          <div className="h-px bg-gradient-to-r from-transparent via-surface-200 to-transparent" />
-
-          {/* Plan & Status */}
-          <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 mb-3">Plan & Status</h4>
-            <div className="grid grid-cols-2 gap-3">
-              <FormField label="Status">
-                <select
-                  value={formData.status}
-                  onChange={(e) => updateForm('status', e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 transition-all"
-                >
-                  {STATUSES.map((s) => (
-                    <option key={s.value} value={s.value}>{s.label}</option>
-                  ))}
-                </select>
-              </FormField>
-              <FormField label="Plan">
-                <select
-                  value={formData.plan}
-                  onChange={(e) => updateForm('plan', e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 transition-all"
-                >
-                  {PLANS.map((p) => (
-                    <option key={p.value} value={p.value}>{p.label}</option>
-                  ))}
-                </select>
-              </FormField>
-              <FormField label="Max Users">
-                <input
-                  type="number"
-                  min={1}
-                  max={10000}
-                  value={formData.maxUsers}
-                  onChange={(e) => updateForm('maxUsers', parseInt(e.target.value) || 5)}
-                  className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 transition-all"
-                />
-              </FormField>
-            </div>
-          </div>
-
-          {/* Separator */}
-          <div className="h-px bg-gradient-to-r from-transparent via-surface-200 to-transparent" />
-
-          {/* Modules */}
-          <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 mb-3">Module Subscriptions</h4>
-            <div className="space-y-2">
-              {AVAILABLE_MODULES.map((mod) => {
-                const checked = formData.subscribedModules.includes(mod.id);
-                return (
-                  <button
-                    key={mod.id}
-                    onClick={() => toggleModule(mod.id)}
-                    className={`
-                      w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-all text-left
-                      ${checked
-                        ? 'border-brand-300 bg-brand-50/50 ring-1 ring-brand-200'
-                        : 'border-surface-200 bg-white hover:bg-surface-50'
-                      }
-                    `}
-                  >
-                    <div className={`
-                      w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors
-                      ${checked ? 'bg-brand-500 border-brand-500' : 'border-surface-300'}
-                    `}>
-                      {checked && <CheckCircle2 size={10} className="text-white" />}
-                    </div>
-                    <div>
-                      <p className="text-xs font-semibold text-surface-700">{mod.name}</p>
-                      <p className="text-[10px] text-surface-400 font-mono">{mod.id}</p>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Separator */}
-          <div className="h-px bg-gradient-to-r from-transparent via-surface-200 to-transparent" />
-
-          {/* Contact Info */}
-          <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 mb-3">Contact Information</h4>
-            <div className="space-y-3">
-              <FormField label="Industry">
-                <input
-                  type="text"
-                  value={formData.metadata.industry}
-                  onChange={(e) => updateMetadata('industry', e.target.value)}
-                  placeholder="Technology, Healthcare, etc."
-                  className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 transition-all"
-                />
-              </FormField>
-              <FormField label="Contact Email">
-                <input
-                  type="email"
-                  value={formData.metadata.contactEmail}
-                  onChange={(e) => updateMetadata('contactEmail', e.target.value)}
-                  placeholder="admin@company.com"
-                  className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 transition-all"
-                />
-              </FormField>
-              <FormField label="Contact Phone">
-                <input
-                  type="tel"
-                  value={formData.metadata.contactPhone}
-                  onChange={(e) => updateMetadata('contactPhone', e.target.value)}
-                  placeholder="+1 (555) 123-4567"
-                  className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 transition-all"
-                />
-              </FormField>
-            </div>
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-3 pt-4 mt-4 border-t border-surface-100">
-          <Button variant="secondary" onClick={() => setIsFormOpen(false)}>Cancel</Button>
-          <Button
-            variant="primary"
-            onClick={handleSave}
-            isLoading={saving}
-            disabled={!formData.name.trim()}
-            icon={editingTenant ? <Edit3 size={14} /> : <Plus size={14} />}
-          >
-            {editingTenant ? 'Update Tenant' : 'Create Tenant'}
-          </Button>
-        </div>
+        <CreateTenantForm
+          mode="admin"
+          initialData={editingTenant}
+          isEditing={!!editingTenant}
+          onSubmit={handleSave}
+          onCancel={() => setIsFormOpen(false)}
+          isLoading={saving}
+        />
       </ActionModal>
 
-      {/* Delete Confirmation */}
+      {/* Delete Confirmation — uses variant=confirm for single set of buttons */}
       <ActionModal
         isOpen={isDeleteOpen}
         onClose={() => { setIsDeleteOpen(false); setDeletingTenant(null); }}
         title="Delete Tenant"
         icon={AlertTriangle}
         size="sm"
+        variant="confirm"
+        confirmLabel="Delete Tenant"
+        confirmVariant="danger"
+        onConfirm={handleDelete}
+        isProcessing={deleting}
       >
-        <div className="py-4">
+        <div className="py-2">
           <p className="text-sm text-surface-600">
             Are you sure you want to delete <strong className="text-surface-800">{deletingTenant?.name}</strong>?
           </p>
@@ -502,32 +302,7 @@ export default function TenantManagement({ isDatabaseReady }) {
             This action cannot be undone. All tenant data, users, and module subscriptions will be permanently removed.
           </p>
         </div>
-        <div className="flex items-center justify-end gap-3 pt-3 border-t border-surface-100">
-          <Button variant="secondary" onClick={() => { setIsDeleteOpen(false); setDeletingTenant(null); }}>Cancel</Button>
-          <Button
-            variant="danger"
-            onClick={handleDelete}
-            isLoading={deleting}
-            icon={<Trash2 size={14} />}
-          >
-            Delete Tenant
-          </Button>
-        </div>
       </ActionModal>
-    </div>
-  );
-}
-
-// --- Local sub-component ---
-function FormField({ label, required, hint, children }) {
-  return (
-    <div>
-      <label className="flex items-center gap-1.5 text-xs font-semibold text-surface-600 mb-1.5">
-        {label}
-        {required && <span className="text-rose-400">*</span>}
-        {hint && <span className="text-[10px] text-surface-400 font-normal ml-1">({hint})</span>}
-      </label>
-      {children}
     </div>
   );
 }

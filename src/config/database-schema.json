@@ -89,6 +89,27 @@
         "updatedBy": "string — Admin who last modified",
         "updatedAt": "timestamp"
       }
+    },
+    "users": {
+      "path": "Users",
+      "description": "Self-registered platform users. They register via the public wizard, own tenants, and access subscribed modules. Passwords stored as bcrypt hashes.",
+      "fields": {
+        "userId": "string — Auto-generated unique identifier (user_<timestamp>)",
+        "email": "string — User email (unique, used for login)",
+        "displayName": "string — Full name",
+        "passwordHash": "string — bcrypt hash (NEVER store plain text)",
+        "phone": "string — Optional contact phone",
+        "status": "string — active | inactive | suspended",
+        "role": "string — tenant_owner | tenant_admin | tenant_user",
+        "tenantId": "string — The tenant this user owns/belongs to",
+        "createdAt": "timestamp — Registration date",
+        "lastLoginAt": "timestamp — Last login time",
+        "metadata": {
+          "registrationSource": "string — self_registration | admin_created | invitation",
+          "agreedToTerms": "boolean",
+          "registeredAt": "timestamp"
+        }
+      }
     }
   },
 

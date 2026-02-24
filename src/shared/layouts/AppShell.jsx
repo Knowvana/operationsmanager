@@ -34,6 +34,8 @@ export default function AppShell({
   onSwitchModule,
   onOpenSettings,
   onLogout,
+  onSystemAdmin,
+  onRegister,
   user,
 
   // SideNav props
@@ -67,6 +69,8 @@ export default function AppShell({
         onSwitchModule={onSwitchModule}
         onOpenSettings={onOpenSettings}
         onLogout={onLogout}
+        onSystemAdmin={onSystemAdmin}
+        onRegister={onRegister}
         user={user}
         onToggleRightPanel={() => setIsRightPanelOpen((o) => !o)}
         isRightPanelOpen={isRightPanelOpen}

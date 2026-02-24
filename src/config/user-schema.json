@@ -1,0 +1,36 @@
+{
+  "_schema": "UserSchema — Defines the structure for self-registered platform users. These are NOT system admins. They register via the public registration wizard, create their own tenant, and access subscribed modules.",
+
+  "collection": "Users",
+  "parent_path": "platforms/knowvana",
+  "full_path": "platforms/knowvana/Users",
+
+  "fields": {
+    "userId": "string — Auto-generated unique identifier (user_<timestamp>)",
+    "email": "string — User email (unique, used for login)",
+    "displayName": "string — Full name",
+    "passwordHash": "string — bcrypt hash (NEVER store plain text)",
+    "phone": "string — Optional contact phone",
+    "status": "string — active | inactive | suspended",
+    "role": "string — tenant_owner | tenant_admin | tenant_user",
+    "tenantId": "string — The tenant this user owns/belongs to",
+    "createdAt": "timestamp — Registration date",
+    "lastLoginAt": "timestamp — Last login time",
+    "metadata": {
+      "registrationSource": "string — self_registration | admin_created | invitation",
+      "agreedToTerms": "boolean",
+      "registeredAt": "timestamp"
+    }
+  },
+
+  "indexes": {
+    "email_unique": "email — Must be unique across all users",
+    "tenantId": "tenantId — For querying users by tenant"
+  },
+
+  "validation": {
+    "email": "required, valid email format",
+    "displayName": "required, min 2 chars",
+    "password": "required, min 6 chars (hashed before storage)"
+  }
+}
