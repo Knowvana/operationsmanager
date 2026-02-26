@@ -21,10 +21,8 @@ export { default as EmptyState } from './components/EmptyState';
 export { default as LoginForm } from './components/LoginForm';
 export { default as SettingsConfig } from './components/SettingsConfig';
 export { default as ProgressModal } from './components/ProgressModal';
-export { default as SuccessModal } from './components/SuccessModal';
-export { default as ErrorModal } from './components/ErrorModal';
-export { default as ConfirmationModal } from './components/ConfirmationModal';
 export { default as CreateTenantForm } from './components/CreateTenantForm';
+export { default as TenantForm } from './components/CreateTenantForm';
 export { default as StepWizard } from './components/wizards/StepWizard';
 
 // --- Layouts ---
@@ -36,7 +34,10 @@ export { default as RightPanel } from './layouts/RightPanel';
 
 // --- Services ---
 export { default as Logger } from './services/logger';
+export { default as GlobalLogStore } from './services/globalLogStore';
+export { default as ApiClient } from './services/apiClient';
 export { default as AuthService } from './services/authService';
+export { default as DatabaseService } from './services/databaseService';
 export { default as PlatformService } from './services/platformService';
 export { default as UserService } from './services/userService';
 

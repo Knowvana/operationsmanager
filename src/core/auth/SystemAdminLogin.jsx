@@ -5,7 +5,7 @@
 // This file contains ONLY the auth logic (validate against JSON config).
 // The UI is 100% delegated to the shared LoginForm component.
 // This is the pattern for all login pages:
-//   1. Define an auth handler (JSON, Firebase, OAuth, etc.)
+//   1. Define an auth handler (JSON, database, OAuth, etc.)
 //   2. Pass it to <LoginForm onLogin={handler} /> with branding props
 //
 // Route: /admin-setup
@@ -15,7 +15,7 @@ import { Shield } from 'lucide-react';
 import { LoginForm, Logger } from '@shared';
 import systemAdminConfig from '@config/system-admin.json';
 
-export default function SystemAdminLogin({ onLogin, appName = 'Operations Manager' }) {
+export default function SystemAdminLogin({ onLogin, appName = 'Operations Manager', embedded = false }) {
 
   // Auth handler: validate against the local JSON config file
   const handleAdminLogin = async (email, password) => {
@@ -51,6 +51,7 @@ export default function SystemAdminLogin({ onLogin, appName = 'Operations Manage
       accentColor="amber"
       defaultEmail={systemAdminConfig.email}
       defaultPassword={systemAdminConfig.password}
+      embedded={embedded}
       footerHint={
         <>
           Default credentials are defined in{' '}

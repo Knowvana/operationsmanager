@@ -1,25 +1,20 @@
 // ============================================================================
-// TenantManagement — Full CRUD for platform tenants.
+// TenantManagement — Platform tenant management with left menu + grid layout.
 //
 // ARCHITECTURE NOTE:
-// Lives under core/ (not modules/) because tenants are a platform-level
-// concern. Modules are tenant-scoped features; tenants are the foundation.
-//
-// Features:
-//   - View all tenants in a table
-//   - Create new tenant (modal form)
-//   - Edit tenant (modal form)
-//   - Delete tenant (confirmation)
-//   - Status badges, plan indicators
-//
-// Uses shared components: Card, Button, ActionModal, PageHeader, etc.
+// Left menu: All Tenants | Active | Trial | Suspended (status-based filter)
+// Grid: Shows tenants in card grid with plan/status badges
+// Full CRUD: Create, Edit, Delete tenants
+// Pattern matches UserManagement for consistency.
 // ============================================================================
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Building2, Plus, Search, Edit3, Trash2, X,
-  AlertTriangle, Package, RefreshCw
+  AlertTriangle, Package, RefreshCw, Mail, CheckCircle2,
+  Clock, XCircle
 } from 'lucide-react';
-import { Card, Button, PageHeader, ActionModal, EmptyState, Logger, PlatformService, CreateTenantForm } from '@shared';
+import { Card, Button, PageHeader, ActionModal, EmptyState, Logger, PlatformService, TenantForm } from '@shared';
+import messages from '@config/messages.json';
 
 const PLANS = [
   { value: 'free', label: 'Free', color: 'bg-surface-100 text-surface-600' },
@@ -29,12 +24,53 @@ const PLANS = [
 ];
 
 const STATUSES = [
-  { value: 'active', label: 'Active', color: 'bg-emerald-50 text-emerald-600' },
-  { value: 'trial', label: 'Trial', color: 'bg-blue-50 text-blue-600' },
-  { value: 'suspended', label: 'Suspended', color: 'bg-rose-50 text-rose-600' },
+  { value: 'active', label: 'Active', color: 'bg-emerald-50 text-emerald-600', icon: CheckCircle2 },
+  { value: 'trial', label: 'Trial', color: 'bg-blue-50 text-blue-600', icon: Clock },
+  { value: 'suspended', label: 'Suspended', color: 'bg-rose-50 text-rose-600', icon: XCircle },
 ];
 
-export default function TenantManagement({ isDatabaseReady }) {
+const MENU_ITEMS = [
+  { id: 'all', label: messages.platformAdmin.tenants.allTenants, icon: Building2 },
+  { id: 'active', label: 'Active', icon: CheckCircle2 },
+  { id: 'trial', label: 'Trial', icon: Clock },
+  { id: 'suspended', label: 'Suspended', icon: XCircle },
+];
+
+function getPlanBadge(plan) { return PLANS.find(p => p.value === plan) || PLANS[0]; }
+function getStatusBadge(status) { return STATUSES.find(s => s.value === status) || STATUSES[0]; }
+
+// Reusable tenant card component
+function TenantCard({ tenant, onEdit, onDelete }) {
+  const plan = getPlanBadge(tenant.plan);
+  const status = getStatusBadge(tenant.status);
+  return (
+    <Card variant="flat" className="p-4">
+      <div className="space-y-3">
+        <div>
+          <h4 className="text-sm font-bold text-surface-800 mb-1">{tenant.name || '—'}</h4>
+          <p className="text-[10px] font-mono text-surface-400">{tenant.tenantId || tenant.id}</p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${status.color}`}>{status.label}</span>
+          <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${plan.color}`}>{plan.label}</span>
+        </div>
+        <div className="flex items-center gap-3 text-[10px] text-surface-400">
+          {tenant.metadata?.contactEmail && (
+            <div className="flex items-center gap-1 truncate"><Mail size={10} />{tenant.metadata.contactEmail}</div>
+          )}
+          <div className="flex items-center gap-1"><Package size={10} />{tenant.subscribedModules?.length || 0} modules</div>
+        </div>
+        <div className="flex items-center gap-2 pt-2 border-t border-surface-100">
+          <Button variant="secondary" size="xs" icon={<Edit3 size={12} />} onClick={() => onEdit?.(tenant)}>Edit</Button>
+          <Button variant="ghost" size="xs" icon={<Trash2 size={12} />} onClick={() => onDelete?.(tenant)}>Delete</Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+export default function TenantManagement({ isDatabaseReady = true }) {
+  const [activeMenu, setActiveMenu] = useState('all');
   const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
@@ -46,7 +82,6 @@ export default function TenantManagement({ isDatabaseReady }) {
   const [deleting, setDeleting] = useState(false);
 
   const loadTenants = useCallback(async () => {
-    if (!isDatabaseReady) return;
     setLoading(true);
     try {
       const data = await PlatformService.getTenants();
@@ -59,35 +94,29 @@ export default function TenantManagement({ isDatabaseReady }) {
     }
   }, [isDatabaseReady]);
 
-  useEffect(() => {
-    loadTenants();
-  }, [loadTenants]);
+  useEffect(() => { loadTenants(); }, [loadTenants]);
 
-  const filteredTenants = tenants.filter((t) => {
-    if (!searchText) return true;
+  // Count by status for menu badges
+  const statusCounts = useMemo(() => ({
+    all: tenants.length,
+    active: tenants.filter(t => t.status === 'active').length,
+    trial: tenants.filter(t => t.status === 'trial').length,
+    suspended: tenants.filter(t => t.status === 'suspended').length,
+  }), [tenants]);
+
+  // Filter by active menu + search
+  const filteredTenants = useMemo(() => {
+    let list = tenants;
+    if (activeMenu !== 'all') list = list.filter(t => t.status === activeMenu);
+    if (!searchText) return list;
     const q = searchText.toLowerCase();
-    return (
+    return list.filter(t =>
       t.name?.toLowerCase().includes(q) ||
       t.tenantId?.toLowerCase().includes(q) ||
       t.metadata?.contactEmail?.toLowerCase().includes(q) ||
       t.plan?.toLowerCase().includes(q)
     );
-  });
-
-  const openCreate = () => {
-    setEditingTenant(null);
-    setIsFormOpen(true);
-  };
-
-  const openEdit = (tenant) => {
-    setEditingTenant(tenant);
-    setIsFormOpen(true);
-  };
-
-  const openDelete = (tenant) => {
-    setDeletingTenant(tenant);
-    setIsDeleteOpen(true);
-  };
+  }, [tenants, activeMenu, searchText]);
 
   const handleSave = async (formData) => {
     setSaving(true);
@@ -124,183 +153,86 @@ export default function TenantManagement({ isDatabaseReady }) {
     }
   };
 
-  const getPlanBadge = (plan) => PLANS.find((p) => p.value === plan) || PLANS[0];
-  const getStatusBadge = (status) => STATUSES.find((s) => s.value === status) || STATUSES[0];
-
-  // Not connected
-  if (!isDatabaseReady) {
-    return (
-      <div className="animate-fade-in">
-        <PageHeader title="Tenant Management" subtitle="Manage organizations and subscriptions" icon={Building2} />
-        <EmptyState
-          icon={<AlertTriangle size={40} className="text-amber-400" />}
-          title="Database not initialized"
-          description="Please run the Database Setup Wizard before managing tenants."
-        />
-      </div>
-    );
-  }
-
   return (
     <div className="animate-fade-in space-y-4">
-      <PageHeader title="Tenant Management" subtitle={`${tenants.length} organization${tenants.length !== 1 ? 's' : ''}`} icon={Building2} />
+      <PageHeader title={messages.platformAdmin.tenants.title} subtitle={`${tenants.length} organization${tenants.length !== 1 ? 's' : ''}`} icon={Building2} />
 
-      {/* Toolbar */}
-      <Card variant="flat" className="p-3">
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="relative flex-1 min-w-[200px]">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" />
-            <input
-              type="text"
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              placeholder="Search tenants..."
-              className="w-full pl-9 pr-3 py-2 text-sm border border-surface-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 focus:border-brand-400 transition-all"
-            />
-            {searchText && (
-              <button onClick={() => setSearchText('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-surface-400 hover:text-surface-600">
-                <X size={14} />
-              </button>
-            )}
-          </div>
-          <div className="flex items-center gap-2 ml-auto">
-            <button
-              onClick={loadTenants}
-              className="p-2 rounded-lg text-surface-400 hover:text-surface-600 hover:bg-surface-100 transition-colors"
-              title="Refresh"
-            >
-              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-            </button>
-            <Button icon={<Plus size={14} />} onClick={openCreate}>
-              Create Tenant
-            </Button>
-          </div>
+      <div className="flex gap-4">
+        {/* Left Menu */}
+        <div className="w-48 flex-shrink-0">
+          <Card variant="flat" className="p-2">
+            {MENU_ITEMS.map(item => {
+              const Icon = item.icon;
+              const isActive = activeMenu === item.id;
+              const count = statusCounts[item.id] || 0;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => { setActiveMenu(item.id); setSearchText(''); }}
+                  className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-xs font-semibold transition-all mb-1 ${
+                    isActive ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'text-surface-500 hover:bg-surface-50 hover:text-surface-700'
+                  }`}
+                >
+                  <Icon size={14} />
+                  <span className="flex-1 text-left">{item.label}</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${isActive ? 'bg-brand-100 text-brand-600' : 'bg-surface-100 text-surface-400'}`}>{count}</span>
+                </button>
+              );
+            })}
+          </Card>
         </div>
-      </Card>
 
-      {/* Tenant Table */}
-      <Card variant="elevated" className="overflow-hidden">
-        {filteredTenants.length === 0 ? (
-          <div className="py-16">
+        {/* Main Content */}
+        <div className="flex-1 space-y-4">
+          {/* Toolbar */}
+          <Card variant="flat" className="p-3 flex items-center justify-between gap-3">
+            <div className="relative flex-1 max-w-xs">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" />
+              <input type="text" value={searchText} onChange={(e) => setSearchText(e.target.value)}
+                placeholder="Search tenants..."
+                className="w-full pl-9 pr-3 py-2 text-sm border border-surface-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 transition-all" />
+              {searchText && (
+                <button onClick={() => setSearchText('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-surface-400 hover:text-surface-600"><X size={14} /></button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="primary" size="sm" icon={<Plus size={14} />} onClick={() => { setEditingTenant(null); setIsFormOpen(true); }}>Create Tenant</Button>
+              <Button variant="ghost" size="sm" icon={<RefreshCw size={14} />} onClick={loadTenants} disabled={loading} />
+            </div>
+          </Card>
+
+          {/* Tenant Grid */}
+          {filteredTenants.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {filteredTenants.map(tenant => (
+                <TenantCard
+                  key={tenant.id}
+                  tenant={tenant}
+                  onEdit={(t) => { setEditingTenant(t); setIsFormOpen(true); }}
+                  onDelete={(t) => { setDeletingTenant(t); setIsDeleteOpen(true); }}
+                />
+              ))}
+            </div>
+          ) : (
             <EmptyState
               icon={<Building2 size={40} className="text-surface-300" />}
-              title={searchText ? 'No tenants match your search' : 'No tenants yet'}
-              description={searchText ? 'Try adjusting your search terms.' : 'Create your first tenant to start onboarding organizations.'}
-              action={!searchText && <Button icon={<Plus size={14} />} onClick={openCreate}>Create Tenant</Button>}
+              title={searchText ? 'No tenants match your search' : `No ${activeMenu === 'all' ? '' : activeMenu + ' '}tenants found`}
+              description={searchText ? 'Try adjusting your search terms' : 'Create your first tenant to get started'}
             />
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-surface-50/80">
-                <tr className="border-b border-surface-200">
-                  <th className="text-left px-4 py-3 font-semibold text-surface-500">Tenant</th>
-                  <th className="text-left px-4 py-3 font-semibold text-surface-500 w-20">Status</th>
-                  <th className="text-left px-4 py-3 font-semibold text-surface-500 w-24">Plan</th>
-                  <th className="text-left px-4 py-3 font-semibold text-surface-500 w-20">Modules</th>
-                  <th className="text-left px-4 py-3 font-semibold text-surface-500 w-28">Contact</th>
-                  <th className="text-right px-4 py-3 font-semibold text-surface-500 w-20">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredTenants.map((tenant) => {
-                  const plan = getPlanBadge(tenant.plan);
-                  const status = getStatusBadge(tenant.status);
-                  return (
-                    <tr key={tenant.id} className="border-b border-surface-50 hover:bg-surface-50/50 transition-colors">
-                      <td className="px-4 py-3">
-                        <div>
-                          <p className="text-sm font-semibold text-surface-800">{tenant.name || '—'}</p>
-                          <p className="text-[10px] font-mono text-surface-400 mt-0.5">{tenant.tenantId || tenant.id}</p>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${status.color}`}>
-                          {status.label}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${plan.color}`}>
-                          {plan.label}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-surface-600">
-                        <div className="flex items-center gap-1">
-                          <Package size={12} className="text-surface-400" />
-                          {tenant.subscribedModules?.length || 0}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <p className="text-[10px] text-surface-500 truncate max-w-[120px]">
-                          {tenant.metadata?.contactEmail || '—'}
-                        </p>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            onClick={() => openEdit(tenant)}
-                            className="p-1.5 rounded-lg text-surface-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
-                            title="Edit"
-                          >
-                            <Edit3 size={13} />
-                          </button>
-                          <button
-                            onClick={() => openDelete(tenant)}
-                            className="p-1.5 rounded-lg text-surface-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                            title="Delete"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+          )}
+        </div>
+      </div>
 
-      {/* Create/Edit Modal — uses shared CreateTenantForm, variant=custom (no auto footer) */}
-      <ActionModal
-        isOpen={isFormOpen}
-        onClose={() => setIsFormOpen(false)}
-        title={editingTenant ? 'Edit Tenant' : 'Create Tenant'}
-        icon={Building2}
-        size="xl"
-        variant="custom"
-      >
-        <CreateTenantForm
-          mode="admin"
-          initialData={editingTenant}
-          isEditing={!!editingTenant}
-          onSubmit={handleSave}
-          onCancel={() => setIsFormOpen(false)}
-          isLoading={saving}
-        />
+      {/* Create/Edit Modal */}
+      <ActionModal isOpen={isFormOpen} onClose={() => setIsFormOpen(false)} title={editingTenant ? 'Edit Tenant' : 'Create Tenant'} icon={Building2} size="xl" variant="custom">
+        <TenantForm mode="admin" initialData={editingTenant} isEditing={!!editingTenant} onSubmit={handleSave} onCancel={() => setIsFormOpen(false)} isLoading={saving} />
       </ActionModal>
 
-      {/* Delete Confirmation — uses variant=confirm for single set of buttons */}
-      <ActionModal
-        isOpen={isDeleteOpen}
-        onClose={() => { setIsDeleteOpen(false); setDeletingTenant(null); }}
-        title="Delete Tenant"
-        icon={AlertTriangle}
-        size="sm"
-        variant="confirm"
-        confirmLabel="Delete Tenant"
-        confirmVariant="danger"
-        onConfirm={handleDelete}
-        isProcessing={deleting}
-      >
+      {/* Delete Confirmation */}
+      <ActionModal isOpen={isDeleteOpen} onClose={() => { setIsDeleteOpen(false); setDeletingTenant(null); }} title="Delete Tenant" icon={AlertTriangle} size="sm" variant="confirm" confirmLabel="Delete Tenant" confirmVariant="danger" onConfirm={handleDelete} isProcessing={deleting}>
         <div className="py-2">
-          <p className="text-sm text-surface-600">
-            Are you sure you want to delete <strong className="text-surface-800">{deletingTenant?.name}</strong>?
-          </p>
-          <p className="text-xs text-rose-500 mt-2">
-            This action cannot be undone. All tenant data, users, and module subscriptions will be permanently removed.
-          </p>
+          <p className="text-sm text-surface-600">Are you sure you want to delete <strong className="text-surface-800">{deletingTenant?.name}</strong>?</p>
+          <p className="text-xs text-rose-500 mt-2">This action cannot be undone. All tenant data, users, and module subscriptions will be permanently removed.</p>
         </div>
       </ActionModal>
     </div>

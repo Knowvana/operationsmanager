@@ -40,6 +40,7 @@ export default function ActionModal({
   subtitle,
   icon,
   size = 'md',
+  autoFit = false,
 
   // Variant controls the footer layout
   variant = 'confirm',
@@ -146,6 +147,7 @@ export default function ActionModal({
       subtitle={subtitle}
       icon={icon}
       size={size}
+      autoFit={autoFit}
     >
       {children}
       {renderFooter()}

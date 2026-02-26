@@ -10,20 +10,20 @@
 //   4. Enhanced API tracking: URL, method, status, response time, payloads
 //   5. Admin-configurable: App admins control what gets logged
 //   6. Subscriber pattern: UI components can subscribe to new logs
-//   7. Batch flush: logs accumulate in memory and flush to Firestore
-//      periodically or when buffer threshold is hit (minimizes costs)
+//   7. Batch flush: logs accumulate in memory and flush to PostgreSQL
+//      periodically or when buffer threshold is hit
 //
-// Logging Strategy (Firebase cost optimization):
+// Logging Strategy:
 //   - ALL logs go to in-memory buffer first (instant, zero cost)
 //   - Only warn/error logs are eligible for DB persistence
 //   - Batch flush: every N seconds OR when flush buffer hits threshold
-//   - Single batched write = 1 Firestore write for N log entries
+//   - Single batched insert to PostgreSQL via Supabase
 //   - Manual flush available via Logger.flushToDatabase()
 //   - On browser close, pending logs are flushed via beforeunload
 //
 // Usage:
 //   Logger.info('Auth', 'User logged in', { email });
-//   Logger.error('Firebase', 'Connection failed', { code }, 'failure');
+//   Logger.error('Database', 'Connection failed', { code }, 'failure');
 //   Logger.api('GET', '/Tenants', 200, 45, { req }, { res });
 //   Logger.setUser('admin@knowvana.com');
 // ============================================================================
@@ -39,9 +39,6 @@ let config = {
   consoleOutput: true,
   captureApiCalls: true,
   captureTimestamps: true,
-  // Batch flush settings
-  flushIntervalSeconds: 60,
-  flushThreshold: 50,
   persistLevels: ['warn', 'error'],
 };
 
@@ -50,8 +47,6 @@ let currentUser = null;
 let sessionId = `sess_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 const systemLogs = [];
 const apiLogs = [];
-const flushBuffer = []; // logs pending DB write
-let flushTimer = null;
 const subscribers = new Set();
 
 function notify() {
@@ -97,16 +92,8 @@ function addSystemLog(entry) {
     );
   }
 
-  // Add to flush buffer if level qualifies for persistence
-  if (config.persistLevels.includes(entry.level)) {
-    flushBuffer.push(entry);
-    if (flushBuffer.length >= config.flushThreshold) {
-      Logger.flushToDatabase();
-    }
-  }
-
-  // Add to GlobalLogStore for cross-browser access
-  globalLogStore.addSystemLog(entry);
+  // Push to GlobalLogStore (application-wide cache for all users/browsers)
+  try { globalLogStore.addSystemLog(entry); } catch (_) { /* ignore */ }
 
   notify();
 }
@@ -117,28 +104,11 @@ function addApiLog(entry) {
   if (apiLogs.length > config.maxBufferSize) {
     apiLogs.pop();
   }
-  // Add to GlobalLogStore for cross-browser access
-  globalLogStore.addApiLog(entry);
+  // Push to GlobalLogStore (application-wide cache for all users/browsers)
+  try { globalLogStore.addApiLog(entry); } catch (_) { /* ignore */ }
   notify();
 }
 
-function startFlushTimer() {
-  stopFlushTimer();
-  if (config.flushIntervalSeconds > 0) {
-    flushTimer = setInterval(() => {
-      if (flushBuffer.length > 0) {
-        Logger.flushToDatabase();
-      }
-    }, config.flushIntervalSeconds * 1000);
-  }
-}
-
-function stopFlushTimer() {
-  if (flushTimer) {
-    clearInterval(flushTimer);
-    flushTimer = null;
-  }
-}
 
 // --- Public API ---
 
@@ -218,22 +188,30 @@ const Logger = {
   // Read logs
   getSystemLogs() { return systemLogs; },
   getApiLogs() { return apiLogs; },
-  getFlushBuffer() { return flushBuffer; },
-  getFlushBufferSize() { return flushBuffer.length; },
+  getFlushBuffer() { return []; },
+  getFlushBufferSize() { return globalLogStore.getStats().cacheTotal; },
 
   // Clear logs
   clearSystemLogs() { systemLogs.length = 0; notify(); },
   clearApiLogs() { apiLogs.length = 0; notify(); },
   clearAll() { systemLogs.length = 0; apiLogs.length = 0; notify(); },
 
-  // Batch flush to Firestore
-  // This is async but callers don't need to await it
+  // Flush application cache to database (delegates to GlobalLogStore)
   async flushToDatabase() {
-    console.log('Flush to database pending due to Firebase persistence');
+    return globalLogStore.flushToDatabase();
   },
 
   getConfig() {
-    return config;
+    return { ...config, ...globalLogStore.getConfig() };
+  },
+
+  updateConfig(newConfig) {
+    if (newConfig.minLevel) config.minLevel = newConfig.minLevel;
+    if (newConfig.maxBufferSize) config.maxBufferSize = newConfig.maxBufferSize;
+    if (newConfig.consoleOutput !== undefined) config.consoleOutput = newConfig.consoleOutput;
+    if (newConfig.maxCacheSize || newConfig.flushThreshold) {
+      globalLogStore.updateConfig(newConfig);
+    }
   },
 
   getLogLevels() {
@@ -246,15 +224,10 @@ const Logger = {
   },
 };
 
-// Start flush timer
-startFlushTimer();
-
 // Flush on browser close
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', () => {
-    if (flushBuffer.length > 0) {
-      Logger.flushToDatabase();
-    }
+    Logger.flushToDatabase();
   });
 }
 

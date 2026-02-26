@@ -22,6 +22,7 @@ export default function Modal({
   children,
   size = 'md',
   className = '',
+  autoFit = false,
 }) {
   // Lock body scroll when modal is open
   useEffect(() => {
@@ -92,7 +93,7 @@ export default function Modal({
         )}
 
         {/* Body */}
-        <div className="px-6 py-5 max-h-[70vh] overflow-y-auto">
+        <div className={`px-6 py-5 ${autoFit ? '' : 'max-h-[70vh] overflow-y-auto'}`}>
           {children}
         </div>
       </div>

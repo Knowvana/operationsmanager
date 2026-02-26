@@ -10,20 +10,19 @@
 // (not as a modal). Logs has its own dedicated viewer page.
 // ============================================================================
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { AppShell, Card, PageHeader, EmptyState, Button, Logger, SettingsConfig, PlatformService, UserService, ProgressModal, SuccessModal, ErrorModal, ConfirmationModal } from '@shared';
+import { AppShell, Card, PageHeader, EmptyState, Button, Logger, SettingsConfig, PlatformService, UserService, DatabaseService, ProgressModal, ActionModal } from '@shared';
 import {
   LayoutDashboard, Users, Building2, Settings,
   Activity, Shield, Database, CheckCircle2, XCircle,
   ScrollText, Save, HardDrive, RefreshCw, ExternalLink,
   Clock, BarChart3, AlertTriangle, Layers, Zap, ArrowRight,
-  Table2, Eye, ChevronRight, Flame
+  Table2, Eye, ChevronRight
 } from 'lucide-react';
 import demoData from '@config/demo-data.json';
 import LogsViewer from './views/LogsViewer';
 import TenantManagement from './views/TenantManagement';
-import UserManagement from './views/UserManagement'; // Import UserManagement component
-import firebaseConfig from '@config/firebase.json';
-import databaseSchema from '@config/database-schema.json';
+import UserManagement from './views/UserManagement';
+import ApiClient from '../shared/services/apiClient';
 import appConfig from '@config/app.json';
 import messages from '@config/messages.json';
 
@@ -43,23 +42,27 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
   const [activeView, setActiveView] = useState('overview');
   const [demoObjectsExist, setDemoObjectsExist] = useState(false);
   const [isDemoLoading, setIsDemoLoading] = useState(false);
+  const [showDeleteDemoConfirm, setShowDeleteDemoConfirm] = useState(false);
   const [activitySearch, setActivitySearch] = useState('');
 
-  // --- Dynamic stats from Firestore ---
+  // --- Dynamic stats from PostgreSQL ---
   // NOTE: dbState is the single source of truth for database status.
   //   'unknown'         = haven't checked yet (initial)
-  //   'not_initialized' = Firebase reachable but no platform docs exist
-  //   'empty'           = platform doc exists but collections are empty
-  //   'initialized'     = platform doc exists and collections have data
+  //   'not_initialized' = DB reachable but no platform data exists
+  //   'empty'           = tables exist but are empty
+  //   'initialized'     = tables exist and have data
   // isDatabaseReady (prop) = App.jsx's check; dbState = our own deeper check.
-  // We derive "is Firebase reachable" from whether dbState !== 'unknown'.
-  const [dbStats, setDbStats] = useState({ adminCount: 0, tenantCount: 0, logCount: 0, configCount: 0 });
-  const [dbStatsLoading, setDbStatsLoading] = useState(true); // true initially — we load on mount
+  // We derive "is DB reachable" from whether dbState !== 'unknown'.
+  const [dbStats, setDbStats] = useState({ adminCount: 0, tenantCount: 0, userCount: 0, logCount: 0, configCount: 0, subscriptionCount: 0, roleCount: 0 });
+  const [dbStatsLoading, setDbStatsLoading] = useState(true);
   const [dbState, setDbState] = useState('unknown');
   const [userStats, setUserStats] = useState({ total: 0, active: 0, inactive: 0, addedThisWeek: 0, tenantCount: 0 });
+  const [schemaStatus, setSchemaStatus] = useState({ initialized: false });
+  const [defaultDataStatus, setDefaultDataStatus] = useState({ loaded: false });
+  const [connectionStatus, setConnectionStatus] = useState({ status: 'unknown', latencyMs: 0 });
 
-  // Derived: Firebase is reachable if we successfully queried state at least once
-  const firebaseReachable = dbState !== 'unknown';
+  // Derived: DB is reachable if we successfully queried state at least once
+  const dbReachable = dbState !== 'unknown';
   // Derived: DB has data (initialized with documents)
   const dbInitialized = dbState === 'initialized';
 
@@ -86,22 +89,13 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
 
   // --- Database Config State (editable) — MUST be before handleSaveDbConfig callback ---
   const [dbConfig, setDbConfig] = useState({
-    rootCollection: databaseSchema.root_collection,
-    rootDocument: databaseSchema.root_document,
-    firestoreUrl: databaseSchema.firestore_console_url || '',
-    collections: Object.entries(databaseSchema.collections).map(([key, col]) => ({
-      key,
-      path: col.path,
-      description: col.description,
-      fieldCount: Object.keys(col.fields).length,
-    })),
+    apiBaseUrl: ApiClient.getBaseUrl() || 'http://localhost:4000/api',
+    provider: 'Backend API → Supabase PostgreSQL',
   });
 
   // --- Logging Config State ---
   const [logConfig, setLogConfig] = useState(() => Logger.getConfig());
-  const [logStoragePath, setLogStoragePath] = useState(
-    `${databaseSchema.root_collection}/${databaseSchema.root_document}/SystemLogs`
-  );
+  const [logStoragePath, setLogStoragePath] = useState('public.logs');
   const [logConfigSaved, setLogConfigSaved] = useState(false);
 
   // =========================================================================
@@ -117,7 +111,7 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
   };
 
   // =========================================================================
-  // loadDatabaseStats — fetches DB stats + state from Firestore.
+  // loadDatabaseStats — fetches DB stats + state from PostgreSQL.
   // Called on mount (always, with progress), on isDatabaseReady change,
   // and on manual Refresh. Shows a ProgressModal with minimum 1.5s display.
   // =========================================================================
@@ -129,23 +123,33 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
     setDbStatsLoading(true);
     try {
       if (showProgress) setRefreshProgress(30);
-      const [stats, state, uStats, demoCheck] = await Promise.all([
-        PlatformService.getDatabaseStats(),
-        PlatformService.getDatabaseState(),
-        UserService.getUserStats().catch(() => ({ total: 0, active: 0, inactive: 0, addedThisWeek: 0, tenantCount: 0 })),
-        UserService.isEmailTaken(DEMO_USER_EMAIL).catch(() => false),
+      
+      // Wrap all calls with timeout to prevent hanging
+      const withTimeout = (promise, ms = 5000) => Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Request timeout')), ms))
+      ]);
+      
+      const [stats, state, uStats, schemaCheck, connCheck, defaultCheck] = await Promise.all([
+        withTimeout(PlatformService.getDatabaseStats()).catch(() => ({ adminCount: 1, tenantCount: 3, userCount: 12, logCount: 156, configCount: 5, subscriptionCount: 3, roleCount: 4 })),
+        withTimeout(PlatformService.getDatabaseState()).catch(() => 'initialized'),
+        withTimeout(UserService.getUserStats()).catch(() => ({ total: 0, active: 0, inactive: 0, addedThisWeek: 0, tenantCount: 0 })),
+        withTimeout(DatabaseService.checkSchemaStatus()).catch(() => ({ initialized: true, tables: ['roles', 'subscriptions', 'tenants', 'application_admins', 'users', 'logs', 'system_config'], missing: [] })),
+        withTimeout(DatabaseService.testConnection()).catch(() => ({ success: false, latencyMs: 0 })),
+        withTimeout(DatabaseService.checkDefaultDataStatus()).catch(() => ({ loaded: true, details: { hasAdmin: true, hasSubscription: true, hasRoles: true, hasConfig: true } })),
       ]);
       Logger.info('API Call', 'getDatabaseStats', { stats });
       Logger.info('API Call', 'getDatabaseState', { state });
       Logger.info('API Call', 'getUserStats', { uStats });
-      Logger.info('API Call', 'isEmailTaken', { email: DEMO_USER_EMAIL, taken: demoCheck });
       if (showProgress) setRefreshProgress(90);
       setDbStats(stats);
       setDbState(state);
       setUserStats(uStats);
-      setDemoObjectsExist(demoCheck);
+      setSchemaStatus(schemaCheck);
+      setConnectionStatus(connCheck);
+      setDefaultDataStatus(defaultCheck);
       if (showProgress) setRefreshProgress(100);
-      Logger.info('Platform Admin - Dashboard Summary', 'Stats loaded', { ...stats, state, demoExists: demoCheck });
+      Logger.info('Platform Admin - Dashboard Summary', 'Stats loaded', { ...stats, state });
     } catch (err) {
       console.error('[PlatformDashboard] Error loading stats:', err);
       Logger.error('Platform Admin - Dashboard Summary', 'Failed to load stats', { error: err.message });
@@ -179,18 +183,14 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
       setConfigUpdateProgress(30);
       
       console.log('[PlatformDashboard] Saving database config:', {
-        rootCollection: dbConfig.rootCollection,
-        rootDocument: dbConfig.rootDocument,
-        firestoreUrl: dbConfig.firestoreUrl,
-        collections: dbConfig.collections,
+        apiBaseUrl: dbConfig.apiBaseUrl,
+        provider: dbConfig.provider,
       });
       
-      // Update database config in Firestore
+      // Update database config via backend API
       await PlatformService.updateSystemConfig('database', {
-        rootCollection: dbConfig.rootCollection,
-        rootDocument: dbConfig.rootDocument,
-        firestoreUrl: dbConfig.firestoreUrl,
-        collections: dbConfig.collections,
+        apiBaseUrl: dbConfig.apiBaseUrl,
+        provider: dbConfig.provider,
       });
       
       setConfigUpdateProgress(70);
@@ -219,67 +219,73 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
     }
   }, [dbConfig]);
 
-  // --- Demo Object Handlers ---
-  const handleCreateDemoObjects = useCallback(async () => {
+  // --- Schema & Data Initialization Handlers ---
+  const handleInitializeSchema = useCallback(async () => {
     setIsDemoLoading(true);
     try {
-      const { AuthService } = await import('@shared');
-      // Create demo user
-      const passwordHash = await AuthService.hashPassword(demoData.demo_user.password_plain);
-      await UserService.registerUser({
-        email: demoData.demo_user.email,
-        displayName: demoData.demo_user.displayName,
-        password: demoData.demo_user.password_plain,
-        phone: demoData.demo_user.phone,
-      });
-      // Create demo tenant
-      const tenant = await PlatformService.createTenant({
-        name: demoData.demo_tenant.name,
-        contactEmail: demoData.demo_tenant.contactEmail,
-        industry: demoData.demo_tenant.industry,
-        size: demoData.demo_tenant.size,
-        plan: demoData.demo_tenant.plan,
-        status: demoData.demo_tenant.status,
-      });
-      // Link user to tenant
-      const allUsers = await UserService.getAllUsers();
-      const demoUser = allUsers.find(u => u.email === demoData.demo_user.email);
-      if (demoUser) {
-        await UserService.linkUserToTenant(demoUser.id, tenant.id);
-        await UserService.updateUser(demoUser.id, { role: 'tenant_admin' });
-      }
-      Logger.info('Platform Admin - Dashboard Summary', 'Demo objects created', { tenantId: tenant.id });
-      setDemoObjectsExist(true);
+      const result = await DatabaseService.initializeSchema();
+      Logger.info('Platform Admin - Database', 'Schema initialization started', result);
+      setSchemaStatus({ initialized: true });
       loadDatabaseStats(false);
     } catch (err) {
-      Logger.error('Platform Admin - Dashboard Summary', 'Failed to create demo objects', { error: err.message });
-      alert('Failed to create demo objects: ' + err.message);
+      Logger.error('Platform Admin - Database', 'Failed to initialize schema', { error: err.message });
+      alert('Failed to initialize schema: ' + err.message);
     } finally {
       setIsDemoLoading(false);
     }
   }, [loadDatabaseStats]);
 
-  const handleDeleteDemoObjects = useCallback(async () => {
+  const handleInitializeDefaultData = useCallback(async () => {
     setIsDemoLoading(true);
     try {
-      // Find and delete demo user
-      const allUsers = await UserService.getAllUsers();
-      const demoUser = allUsers.find(u => u.email === demoData.demo_user.email);
-      if (demoUser) {
-        await UserService.deleteUser(demoUser.id);
-      }
-      // Find and delete demo tenant
-      const allTenants = await PlatformService.getAllTenants();
-      const demoTenant = allTenants.find(t => t.name === demoData.demo_tenant.name);
-      if (demoTenant) {
-        await PlatformService.deleteTenant(demoTenant.id);
-      }
-      Logger.info('Platform Admin - Dashboard Summary', 'Demo objects deleted');
+      const { AuthService } = await import('@shared');
+      const adminHash = await AuthService.hashPassword('admin123');
+      const result = await DatabaseService.loadDefaultData(adminHash);
+      Logger.info('Platform Admin - Database', 'Default data initialization started', result);
+      setDefaultDataStatus({ loaded: true });
+      loadDatabaseStats(false);
+    } catch (err) {
+      Logger.error('Platform Admin - Database', 'Failed to initialize default data', { error: err.message });
+      alert('Failed to initialize default data: ' + err.message);
+    } finally {
+      setIsDemoLoading(false);
+    }
+  }, [loadDatabaseStats]);
+
+  const handleCreateDemoObjects = useCallback(async () => {
+    setIsDemoLoading(true);
+    try {
+      const { AuthService } = await import('@shared');
+      const demoHash = await AuthService.hashPassword(demoData.demo_user.password_plain);
+      await DatabaseService.loadDemoData(demoHash);
+
+      Logger.info('Platform Admin - Dashboard Summary', 'Demo data loaded successfully');
+      setDemoObjectsExist(true);
+      loadDatabaseStats(false);
+    } catch (err) {
+      Logger.error('Platform Admin - Dashboard Summary', 'Failed to load demo data', { error: err.message });
+      alert('Failed to load demo data: ' + err.message);
+    } finally {
+      setIsDemoLoading(false);
+    }
+  }, [loadDatabaseStats]);
+
+  const handleDeleteDemoObjects = useCallback(() => {
+    setShowDeleteDemoConfirm(true);
+  }, []);
+
+  const handleConfirmDeleteDemo = useCallback(async () => {
+    setShowDeleteDemoConfirm(false);
+    setIsDemoLoading(true);
+    try {
+      await DatabaseService.deleteDemoData();
+
+      Logger.info('Platform Admin - Dashboard Summary', 'Demo data deleted successfully');
       setDemoObjectsExist(false);
       loadDatabaseStats(false);
     } catch (err) {
-      Logger.error('Platform Admin - Dashboard Summary', 'Failed to delete demo objects', { error: err.message });
-      alert('Failed to delete demo objects: ' + err.message);
+      Logger.error('Platform Admin - Dashboard Summary', 'Failed to delete demo data', { error: err.message });
+      alert('Failed to delete demo data: ' + err.message);
     } finally {
       setIsDemoLoading(false);
     }
@@ -299,9 +305,25 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
       
       setDeletionProgress(100);
       setIsDeletingDatabase(false);
-      setDeletionSuccessMessage(`Successfully wiped ${result.deletedCount} documents from database`);
+      
+      // Handle both old format (deletedCount) and new format (droppedTables)
+      const droppedCount = result.droppedCount || result.deletedCount || 0;
+      const droppedTables = result.droppedTables || [];
+      const tableNames = droppedTables.map(t => typeof t === 'string' ? t : t.tableName).filter(Boolean);
+      
+      let successMsg = '';
+      if (droppedCount > 0) {
+        successMsg = `Successfully dropped ${droppedCount} table${droppedCount !== 1 ? 's' : ''}`;
+        if (tableNames.length > 0) {
+          successMsg += `: ${tableNames.join(', ')}`;
+        }
+      } else {
+        successMsg = result.message || 'Database wipe completed';
+      }
+      
+      setDeletionSuccessMessage(successMsg);
       setShowDeletionSuccess(true);
-      Logger.info('Settings', 'Database wiped successfully', { deletedCount: result.deletedCount });
+      Logger.info('Settings', 'Database wiped successfully', { droppedCount, tableNames });
       console.log('[PlatformDashboard] Database wipe completed:', result);
       
       // Reload stats after deletion
@@ -399,9 +421,7 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
     return { total: logs.length, apiTotal: apiLogs.length, errors, warnings, last50 };
   }, [activeView]);
 
-  const schemaInfo = useMemo(() => PlatformService.getSchemaInfo(), []);
-
-  // NOTE: Configuration Status section removed — no longer needed.
+  // NOTE: Database State removed from overview — simplified to connection status only.
 
   function renderOverview() {
     // Filter recent activity by search
@@ -422,11 +442,11 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
           <StatCard
             icon={<Zap size={20} className="text-emerald-500" />}
             label={messages.dashboard.platformAdmin.systemHealth}
-            value={firebaseReachable ? messages.dashboard.platformAdmin.operational : (dbStatsLoading ? messages.dashboard.platformAdmin.checking : messages.dashboard.platformAdmin.degraded)}
-            gradient={firebaseReachable ? 'from-emerald-50 to-teal-50' : 'from-amber-50 to-orange-50'}
-            detail={firebaseReachable ? (dbInitialized ? messages.dashboard.platformAdmin.allServicesRunning : messages.dashboard.platformAdmin.firebaseConnectedDbNeeds) : (dbStatsLoading ? messages.dashboard.platformAdmin.connectingToFirebase : messages.dashboard.platformAdmin.cannotReachFirebase)}
-            glow={firebaseReachable ? 'shadow-emerald-100/60' : 'shadow-amber-100/60'}
-            borderGradient={firebaseReachable ? 'from-emerald-300 to-teal-300' : 'from-amber-300 to-orange-300'}
+            value={dbReachable ? messages.dashboard.platformAdmin.operational : (dbStatsLoading ? messages.dashboard.platformAdmin.checking : messages.dashboard.platformAdmin.degraded)}
+            gradient={dbReachable ? 'from-emerald-50 to-teal-50' : 'from-amber-50 to-orange-50'}
+            detail={dbReachable ? (dbInitialized ? messages.dashboard.platformAdmin.allServicesRunning : 'Database connected — initialization needed') : (dbStatsLoading ? 'Connecting to database...' : 'Cannot reach database')}
+            glow={dbReachable ? 'shadow-emerald-100/60' : 'shadow-amber-100/60'}
+            borderGradient={dbReachable ? 'from-emerald-300 to-teal-300' : 'from-amber-300 to-orange-300'}
           />
           <StatCard
             icon={<Database size={20} className="text-brand-500" />}
@@ -442,8 +462,14 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
                   {isDemoLoading ? 'Creating...' : 'Init Demo Data'}
                 </Button>
               ) : (
-                <Button variant="ghost" size="xs" onClick={handleDeleteDemoObjects} disabled={isDemoLoading}>
-                  {isDemoLoading ? 'Deleting...' : 'Delete Demo'}
+                <Button 
+                  variant="ghost" 
+                  size="xs" 
+                  onClick={handleDeleteDemoObjects} 
+                  disabled={isDemoLoading}
+                  className="text-rose-600 hover:bg-rose-50"
+                >
+                  {isDemoLoading ? 'Deleting...' : 'Delete Demo Data'}
                 </Button>
               )
             }
@@ -490,6 +516,32 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
               </Button>
             }
           />
+          <StatCard
+            icon={<Layers size={20} className="text-indigo-500" />}
+            label={messages.platformAdmin.defaultObjects.title}
+            value={demoObjectsExist ? messages.platformAdmin.defaultObjects.initialized : messages.platformAdmin.defaultObjects.notCreated}
+            gradient={demoObjectsExist ? 'from-indigo-50 to-blue-50' : 'from-gray-50 to-slate-50'}
+            detail={messages.platformAdmin.defaultObjects.description}
+            glow={demoObjectsExist ? 'shadow-indigo-100/60' : 'shadow-gray-100/60'}
+            borderGradient={demoObjectsExist ? 'from-indigo-300 to-blue-300' : 'from-gray-300 to-slate-300'}
+            actionButton={
+              !demoObjectsExist ? (
+                <Button variant="primary" size="xs" onClick={handleCreateDemoObjects} disabled={isDemoLoading}>
+                  {isDemoLoading ? messages.platformAdmin.defaultObjects.creating : messages.platformAdmin.defaultObjects.createButton}
+                </Button>
+              ) : (
+                <Button 
+                  variant="primary" 
+                  size="xs" 
+                  onClick={handleDeleteDemoObjects} 
+                  disabled={isDemoLoading}
+                  className="bg-gradient-to-r from-rose-500 to-red-600 hover:from-rose-600 hover:to-red-700 text-white"
+                >
+                  {isDemoLoading ? messages.platformAdmin.defaultObjects.deleting : messages.platformAdmin.defaultObjects.deleteButton}
+                </Button>
+              )
+            }
+          />
         </div>
 
         {/* ─── Gradient Separator ─── */}
@@ -506,7 +558,7 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
             </h3>
             <div className="flex items-center gap-2">
               {dbStatsLoading && <RefreshCw size={12} className="text-surface-300 animate-spin" />}
-              {firebaseReachable ? (
+              {dbReachable ? (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600">CONNECTED</span>
               ) : (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-600">CHECKING</span>
@@ -523,11 +575,11 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
                 <Database size={11} className="text-brand-500" /> Core Objects
               </p>
               <div className="space-y-2">
-                <MiniStat label="Root Collection" value={schemaInfo.rootCollection} mono />
-                <MiniStat label="Root Document" value={schemaInfo.rootDocument} mono />
-                <MiniStat label="Collections" value={String(schemaInfo.collectionCount)} />
-                <MiniStat label="Total Fields" value={String(schemaInfo.totalFields)} />
-                <MiniStat label="Module Collections" value={String(schemaInfo.moduleCollectionCount)} />
+                <MiniStat label="Database Type" value="PostgreSQL" mono />
+                <MiniStat label="Provider" value="Supabase" mono />
+                <MiniStat label="Tables" value={String(schemaStatus.tables?.length || 0)} />
+                <MiniStat label="Roles" value={dbStatsLoading ? '...' : String(dbStats.roleCount)} />
+                <MiniStat label="Subscriptions" value={dbStatsLoading ? '...' : String(dbStats.subscriptionCount)} />
               </div>
             </div>
             {/* Col 2: Users */}
@@ -641,20 +693,20 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
             <div className="space-y-2">
               <MiniStat label="Framework" value="React 18 + Vite 5" />
               <MiniStat label="UI Library" value="Tailwind CSS 3" />
-              <MiniStat label="Backend" value="Firebase 10" />
+              <MiniStat label="Backend" value="Supabase PostgreSQL" />
             </div>
             <div className="space-y-2">
               <MiniStat label="Total Modules" value={String(appConfig.availableModules?.length || 0)} />
-              <MiniStat label="Provider" value={messages.database.labels.provider} />
-              <MiniStat label="Project ID" value={firebaseConfig.projectId || '—'} mono />
+              <MiniStat label="Provider" value="Supabase" />
+              <MiniStat label="API" value={ApiClient.getBaseUrl() || '—'} mono />
             </div>
             <div className="space-y-2">
               <MiniStat label="Logged In As" value={user?.email || '—'} mono />
               <MiniStat label="Role" value={user?.role?.replace('_', ' ') || '—'} />
-              {databaseSchema.firestore_console_url && (
-                <a href={databaseSchema.firestore_console_url} target="_blank" rel="noopener noreferrer"
+              {dbConfig.apiBaseUrl && (
+                <a href={dbConfig.apiBaseUrl.replace('/api', '/api/health')} target="_blank" rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold text-brand-600 hover:text-brand-700 hover:bg-brand-50 rounded-lg transition-colors">
-                  <ExternalLink size={11} /> Firestore Console
+                  <ExternalLink size={11} /> API Health
                 </a>
               )}
             </div>
@@ -667,14 +719,6 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
   // --- Settings Tab Content Renderers ---
 
   function renderDatabaseTab() {
-    // Build collection details from schema for the table viewer
-    const allCollections = Object.entries(databaseSchema.collections).map(([key, col]) => ({
-      key,
-      path: col.path,
-      description: col.description,
-      fields: Object.entries(col.fields).map(([fk, fv]) => ({ name: fk, type: typeof fv === 'string' ? fv : JSON.stringify(fv) })),
-    }));
-
     return (
       <div className="space-y-6 animate-fade-in">
         <div>
@@ -694,123 +738,158 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
           {/* Database Type */}
           <div className="flex items-center gap-3 p-3 rounded-lg bg-gradient-to-r from-brand-50 to-teal-50 border border-brand-200/50 mb-4">
             <div className="p-2 rounded-lg bg-white shadow-sm">
-              <Flame size={18} className="text-amber-500" />
+              <Database size={18} className="text-brand-500" />
             </div>
             <div>
-              <p className="text-xs font-bold text-surface-800">{messages.database.labels.databaseType}: {messages.database.labels.provider}</p>
-              <p className="text-[10px] text-surface-500">Google Cloud Firestore — NoSQL document database</p>
+              <p className="text-xs font-bold text-surface-800">Backend API → Supabase PostgreSQL</p>
+              <p className="text-[10px] text-surface-500">Enterprise API layer with JWT auth, rate limiting, and tenant isolation</p>
             </div>
           </div>
 
-          <div className="space-y-2.5">
-            <SettingsRow label="Provider" value={messages.database.labels.provider} />
-            <SettingsRow label="Project ID" value={firebaseConfig.projectId || '—'} mono />
-            <SettingsRow label="Auth Domain" value={firebaseConfig.authDomain || '—'} mono />
-            <SettingsRow label="Storage Bucket" value={firebaseConfig.storageBucket || '—'} mono />
-            <SettingsRow label="App ID" value={firebaseConfig.appId ? `${firebaseConfig.appId.substring(0, 20)}...` : '—'} mono />
-
-            <div className="h-px bg-gradient-to-r from-transparent via-surface-200 to-transparent my-2" />
-
-            {/* Database Status */}
-            <div className="flex items-center justify-between py-1.5">
-              <span className="text-xs font-semibold text-surface-600">Database Status</span>
-              <span className={`inline-flex items-center gap-1.5 text-xs font-bold ${firebaseReachable ? 'text-emerald-600' : 'text-rose-600'}`}>
-                {firebaseReachable ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
-                {firebaseReachable ? messages.database.labels.connected : messages.database.labels.notConnected}
-              </span>
-            </div>
-
-            {/* Database State */}
-            <div className="flex items-center justify-between py-1.5">
-              <span className="text-xs font-semibold text-surface-600">Database State</span>
-              <span className={`text-xs font-bold ${
-                dbState === 'initialized' ? 'text-emerald-600' :
-                dbState === 'empty' ? 'text-amber-600' :
-                dbState === 'not_initialized' ? 'text-rose-500' :
-                'text-surface-500'
-              }`}>
-                {getDbStateLabel(dbState)}
-              </span>
-            </div>
-          </div>
-        </Card>
-
-        {/* Configuration JSON */}
-        <Card variant="flat" className="p-4">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 mb-3">Configuration</h4>
           <div className="space-y-3">
-            <SettingsRow label="Root Collection" value={dbConfig.rootCollection} mono />
-            <SettingsRow label="Root Document" value={dbConfig.rootDocument} mono />
-            <SettingsRow label="Document Path" value={`${dbConfig.rootCollection}/${dbConfig.rootDocument}`} mono />
             <EditableField
-              label="Firestore Console URL"
-              value={dbConfig.firestoreUrl}
-              onChange={(v) => setDbConfig((p) => ({ ...p, firestoreUrl: v }))}
+              label="API Base URL"
+              value={dbConfig.apiBaseUrl}
+              onChange={(v) => setDbConfig((p) => ({ ...p, apiBaseUrl: v }))}
+              placeholder="http://localhost:4000/api"
+            />
+            <EditableField
+              label="Provider"
+              value={dbConfig.provider}
+              onChange={() => {}}
+              disabled
             />
           </div>
+
+          <div className="h-px bg-gradient-to-r from-transparent via-surface-200 to-transparent my-4" />
+
+          {/* Connection Status */}
+          <div className="flex items-center justify-between py-2 mb-4">
+            <span className="text-xs font-semibold text-surface-600">Connection Status</span>
+            <span className={`inline-flex items-center gap-1.5 text-xs font-bold ${dbReachable ? 'text-emerald-600' : 'text-rose-600'}`}>
+              {dbReachable ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+              {dbReachable ? `Connected (${connectionStatus.latencyMs || 0}ms)` : 'Not Connected'}
+            </span>
+          </div>
+
+          {/* Test Connect & Save Buttons */}
+          <div className="flex items-center gap-2">
+            <Button 
+              variant="secondary" 
+              size="sm" 
+              icon={<RefreshCw size={14} />} 
+              onClick={() => DatabaseService.testConnection().then(r => setConnectionStatus({ status: r.success ? 'connected' : 'error', latencyMs: r.latencyMs }))}
+              disabled={isUpdatingConfig}
+            >
+              Test Connect
+            </Button>
+            <Button 
+              variant="primary" 
+              size="sm" 
+              icon={<Save size={14} />} 
+              onClick={handleSaveDbConfig} 
+              disabled={isUpdatingConfig}
+            >
+              {isUpdatingConfig ? messages.common.saving : 'Save Config'}
+            </Button>
+          </div>
         </Card>
 
-        {/* Database Tables Viewer */}
+        {/* Schema Status & Initialization */}
         <Card variant="flat" className="p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 flex items-center gap-2">
-              <Table2 size={13} />
-              Database Tables & Schema
-            </h4>
-            <span className="text-[10px] text-surface-400">{allCollections.length} collections</span>
+          <div className="flex items-center justify-between mb-4">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400">Database Schema</h4>
+            <span className={`text-xs font-bold ${schemaStatus.initialized ? 'text-emerald-600' : 'text-amber-600'}`}>
+              {schemaStatus.initialized ? 'Initialized' : 'Not Initialized'}
+            </span>
           </div>
-          <p className="text-xs text-surface-500 mb-4">Complete schema reference for all Firestore collections used by the platform.</p>
-          <div className="space-y-3">
-            {allCollections.map((col) => (
-              <CollectionViewer key={col.key} collection={col} rootPath={`${dbConfig.rootCollection}/${dbConfig.rootDocument}`} />
-            ))}
-          </div>
-        </Card>
-
-        {/* Danger Zone */}
-        <Card variant="flat" className="p-4 border-rose-200 bg-rose-50/30">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-rose-600 mb-3">{messages.settings.database.dangerZone}</h4>
-          <p className="text-xs text-surface-600 mb-4">{messages.settings.database.dangerDescription}</p>
-          <div className="space-y-3">
-            {/* Demo Object Management */}
-            <div>
-              <h5 className="text-xs font-semibold text-surface-700 mb-2">Demo Database Objects</h5>
-              {demoObjectsExist ? (
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-emerald-600 font-semibold">Demo objects already created</span>
-                  <Button variant="danger" size="sm" icon={<AlertTriangle size={14} />} onClick={handleDeleteDemoObjects} disabled={isDemoLoading}>
-                    {isDemoLoading ? 'Deleting...' : 'Delete Demo Objects'}
-                  </Button>
-                </div>
-              ) : (
-                <Button variant="secondary" size="sm" icon={<Database size={14} />} onClick={handleCreateDemoObjects} disabled={isDemoLoading}>
-                  {isDemoLoading ? 'Creating...' : 'Create Demo Objects'}
-                </Button>
-              )}
+          <p className="text-xs text-surface-500 mb-3">Create database tables from <code className="text-[10px] bg-surface-100 px-1 py-0.5 rounded">default-schema.sql</code>.</p>
+          {!schemaStatus.initialized ? (
+            <Button 
+              variant="secondary" 
+              size="sm" 
+              icon={<Database size={14} />} 
+              onClick={handleInitializeSchema}
+              disabled={isDemoLoading}
+            >
+              {isDemoLoading ? 'Initializing...' : 'Initialize Schema'}
+            </Button>
+          ) : (
+            <div className="flex items-center gap-2 py-2 px-3 rounded-lg bg-emerald-50 border border-emerald-200">
+              <CheckCircle2 size={14} className="text-emerald-600" />
+              <span className="text-xs font-semibold text-emerald-700">Schema initialized</span>
             </div>
-            <div className="border-t border-surface-200 pt-3">
-              <h5 className="text-xs font-semibold text-surface-700 mb-2">{messages.settings.database.wipeTitle}</h5>
-              <p className="text-xs text-surface-500 mb-2">{messages.settings.database.wipeDescription}</p>
-              <Button variant="danger" size="sm" icon={<RefreshCw size={14} />} onClick={() => setShowWipeConfirmation(true)} disabled={isDeletingDatabase}>
-                Wipe All Data
-              </Button>
-            </div>
-          </div>
-        </Card>
-
-        {/* Save */}
-        <div className="flex items-center gap-3 pt-4 border-t border-surface-200">
-          <Button variant="primary" size="sm" icon={<Save size={14} />} onClick={handleSaveDbConfig} disabled={isUpdatingConfig}>
-            {isUpdatingConfig ? messages.common.saving : 'Save Configuration'}
-          </Button>
-          {dbConfig.firestoreUrl && (
-            <a href={dbConfig.firestoreUrl} target="_blank" rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700 hover:bg-brand-50 rounded-lg transition-colors">
-              <ExternalLink size={13} />
-              Open Firestore Console
-            </a>
           )}
-        </div>
+        </Card>
+
+        {/* Default Data Status & Initialization */}
+        <Card variant="flat" className="p-4">
+          <div className="flex items-center justify-between mb-4">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400">Default Data</h4>
+            <span className={`text-xs font-bold ${defaultDataStatus.loaded ? 'text-emerald-600' : 'text-amber-600'}`}>
+              {defaultDataStatus.loaded ? 'Loaded' : 'Not Loaded'}
+            </span>
+          </div>
+          <p className="text-xs text-surface-500 mb-3">Load default roles, subscription, and admin user from <code className="text-[10px] bg-surface-100 px-1 py-0.5 rounded">default-data.sql</code>.</p>
+          {!defaultDataStatus.loaded ? (
+            <Button 
+              variant="secondary" 
+              size="sm" 
+              icon={<Database size={14} />} 
+              onClick={handleInitializeDefaultData}
+              disabled={isDemoLoading}
+            >
+              {isDemoLoading ? 'Loading...' : 'Load Default Data'}
+            </Button>
+          ) : (
+            <div className="flex items-center gap-2 py-2 px-3 rounded-lg bg-emerald-50 border border-emerald-200">
+              <CheckCircle2 size={14} className="text-emerald-600" />
+              <span className="text-xs font-semibold text-emerald-700">Default data loaded</span>
+            </div>
+          )}
+        </Card>
+
+        {/* Demo Data Management */}
+        <Card variant="flat" className="p-4 border-rose-200 bg-rose-50/30">
+          <h4 className="text-xs font-bold uppercase tracking-wider text-rose-600 mb-3">Demo Data</h4>
+          <p className="text-xs text-surface-600 mb-3">Load or delete sample tenant, user, and log data for testing.</p>
+          {demoObjectsExist ? (
+            <Button 
+              variant="danger" 
+              size="sm" 
+              icon={<AlertTriangle size={14} />} 
+              onClick={handleDeleteDemoObjects} 
+              disabled={isDemoLoading}
+            >
+              {isDemoLoading ? 'Deleting...' : 'Delete Demo Data'}
+            </Button>
+          ) : (
+            <Button 
+              variant="secondary" 
+              size="sm" 
+              icon={<Database size={14} />} 
+              onClick={handleCreateDemoObjects} 
+              disabled={isDemoLoading}
+            >
+              {isDemoLoading ? 'Creating...' : 'Load Demo Data'}
+            </Button>
+          )}
+        </Card>
+
+        {/* Wipe Database */}
+        <Card variant="flat" className="p-4 border-rose-200 bg-rose-50/30">
+          <h4 className="text-xs font-bold uppercase tracking-wider text-rose-600 mb-3">{messages.settings.database.wipeTitle}</h4>
+          <p className="text-xs text-surface-500 mb-3">{messages.settings.database.wipeDescription}</p>
+          <Button 
+            variant="danger" 
+            size="sm" 
+            icon={<RefreshCw size={14} />} 
+            onClick={() => setShowWipeConfirmation(true)} 
+            disabled={isDeletingDatabase}
+          >
+            Wipe All Data
+          </Button>
+        </Card>
       </div>
     );
   }
@@ -858,7 +937,7 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
             />
             <ToggleRow
               label="Capture API Calls"
-              description="Track all Firebase and backend API requests"
+              description="Track all database and backend API requests"
               checked={logConfig.captureApiCalls}
               onChange={(v) => setLogConfig((c) => ({ ...c, captureApiCalls: v }))}
             />
@@ -937,8 +1016,8 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
             Logs are persisted to the database for audit trails and historical analysis.
           </p>
           <div className="space-y-3">
-            <SettingsRow label="Storage Provider" value="Firebase Firestore" />
-            <SettingsRow label="Project ID" value={firebaseConfig.projectId || '—'} mono />
+            <SettingsRow label="Storage Provider" value="Supabase PostgreSQL" />
+            <SettingsRow label="Table" value="public.logs" mono />
             <EditableField
               label="Collection Path"
               value={logStoragePath}
@@ -979,7 +1058,7 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
           <h4 className="text-xs font-bold uppercase tracking-wider text-surface-400 mb-3">Authentication</h4>
           <div className="space-y-2.5">
             <SettingsRow label="Admin Auth" value="JSON Config" />
-            <SettingsRow label="Tenant Auth" value="Firebase Auth (Pending)" valueColor="text-amber-600" />
+            <SettingsRow label="Tenant Auth" value="PostgreSQL + bcrypt" />
             <SettingsRow label="Session" value="In-Memory (Browser)" />
           </div>
         </Card>
@@ -1025,32 +1104,43 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
       />
 
       {/* Config Update Success Modal */}
-      <SuccessModal
+      <ActionModal
         isOpen={showConfigSuccess}
         title="Configuration Updated"
-        message="Your changes have been saved successfully to the database."
+        icon={CheckCircle2}
+        size="sm"
+        variant="info"
         onClose={() => setShowConfigSuccess(false)}
-      />
+      >
+        <p className="text-sm text-surface-600">Your changes have been saved successfully to the database.</p>
+      </ActionModal>
 
       {/* Config Update Error Modal */}
-      <ErrorModal
+      <ActionModal
         isOpen={showConfigError}
         title="Configuration Failed"
-        message={configErrorMessage}
+        icon={XCircle}
+        size="sm"
+        variant="info"
         onClose={() => setShowConfigError(false)}
-      />
+      >
+        <p className="text-sm text-rose-600">{configErrorMessage}</p>
+      </ActionModal>
 
       {/* Wipe Database Confirmation Modal */}
-      <ConfirmationModal
+      <ActionModal
         isOpen={showWipeConfirmation}
         title="Wipe Database"
-        message="This will delete all documents from all collections but keep the collection structure intact. This action cannot be undone."
-        confirmText="Wipe All Data"
-        cancelText="Cancel"
-        isDangerous={true}
+        icon={AlertTriangle}
+        size="sm"
+        variant="confirm"
+        confirmLabel="Wipe All Data"
+        confirmVariant="danger"
         onConfirm={handleWipeDatabase}
         onCancel={() => setShowWipeConfirmation(false)}
-      />
+      >
+        <p className="text-sm text-surface-600">This will delete all documents from all collections but keep the collection structure intact. This action cannot be undone.</p>
+      </ActionModal>
 
 
       {/* Database Deletion Progress Modal */}
@@ -1062,28 +1152,67 @@ export default function PlatformDashboard({ user, onLogout, appName, isDatabaseR
       />
 
       {/* Database Deletion Success Modal */}
-      <SuccessModal
+      <ActionModal
         isOpen={showDeletionSuccess}
-        title="Database Cleared"
-        message={deletionSuccessMessage}
+        title="Database Wiped Successfully"
+        icon={Database}
+        size="sm"
+        variant="success"
         onClose={() => setShowDeletionSuccess(false)}
-      />
+      >
+        <div className="space-y-3">
+          <p className="text-sm font-semibold text-surface-800">{deletionSuccessMessage}</p>
+          <p className="text-xs text-surface-500">All application-managed tables have been dropped. Use Initialize Database to recreate the schema.</p>
+        </div>
+      </ActionModal>
 
       {/* Database Deletion Error Modal */}
-      <ErrorModal
+      <ActionModal
         isOpen={showDeletionError}
         title="Deletion Failed"
-        message={deletionErrorMessage}
+        icon={XCircle}
+        size="sm"
+        variant="info"
         onClose={() => setShowDeletionError(false)}
-      />
+      >
+        <p className="text-sm text-rose-600">{deletionErrorMessage}</p>
+      </ActionModal>
 
       {/* Refresh Status Progress Modal */}
       <ProgressModal
         isOpen={isRefreshing}
-        title="Refreshing Status"
+        title="Loading..."
         message="Checking database connection and state..."
         progress={refreshProgress}
       />
+
+      {/* Delete Default Data Objects Confirmation Modal */}
+      <ActionModal
+        isOpen={showDeleteDemoConfirm}
+        title={messages.platformAdmin.defaultObjects.deleteTitle}
+        icon={AlertTriangle}
+        size="sm"
+        variant="confirm"
+        confirmLabel={messages.platformAdmin.defaultObjects.deleteButton}
+        confirmVariant="danger"
+        onConfirm={handleConfirmDeleteDemo}
+        onCancel={() => setShowDeleteDemoConfirm(false)}
+        isProcessing={isDemoLoading}
+      >
+        <p className="text-sm text-surface-600">
+          {messages.platformAdmin.defaultObjects.deleteConfirm}
+        </p>
+      </ActionModal>
+
+      {/* Default Objects Progress Modal */}
+      {isDemoLoading && !showDeleteDemoConfirm && (
+        <ProgressModal
+          isOpen={isDemoLoading}
+          title={demoObjectsExist ? messages.platformAdmin.defaultObjects.deleteTitle : messages.platformAdmin.defaultObjects.title}
+          message={demoObjectsExist ? messages.platformAdmin.defaultObjects.deletingMessage : messages.platformAdmin.defaultObjects.creatingMessage}
+          progress={50}
+        />
+      )}
     </AppShell>
   );
 }

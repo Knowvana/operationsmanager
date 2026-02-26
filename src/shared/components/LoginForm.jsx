@@ -4,10 +4,10 @@
 // ARCHITECTURE NOTE:
 // This component handles ONLY the UI. It does NOT know how authentication
 // works. The parent passes an `onLogin(email, password)` handler that
-// determines the auth backend (JSON file, Firebase, etc.).
+// determines the auth backend (JSON file, database, OAuth, etc.).
 //
 // Usage:
-//   Tenant login:  <LoginForm onLogin={firebaseLogin} title="Sign In" />
+//   Tenant login:  <LoginForm onLogin={dbLogin} title="Sign In" />
 //   Admin setup:   <LoginForm onLogin={jsonLogin} title="Admin Setup"
 //                     icon={Shield} accentColor="amber" subtitle="System Administration" />
 // ============================================================================

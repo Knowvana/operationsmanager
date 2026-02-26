@@ -1,0 +1,8 @@
+{
+  "supabaseUrl": "https://vlbpkzcgpiwozkafbekn.supabase.co",
+  "supabasePublishableKey": "sb_publishable_dd0Qpg4bVdLQq6kjAF-Q_wKAWyqr_",
+  "provider": "Supabase PostgreSQL",
+  "db": {
+    "schema": "public"
+  }
+}

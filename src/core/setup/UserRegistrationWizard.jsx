@@ -313,21 +313,15 @@ export default function UserRegistrationWizard({ isOpen, onClose, onComplete }) 
                   {emailChecking && (
                     <div className="space-y-1.5">
                       <div className="w-full h-1.5 bg-surface-100 rounded-full overflow-hidden">
-                        <div className="h-full bg-gradient-to-r from-brand-500 to-teal-500 rounded-full animate-pulse" style={{ width: '100%', animationDuration: '2s', animationIterationCount: 'infinite' }} />
+                        <div className="h-full w-1/3 bg-gradient-to-r from-brand-500 to-teal-500 rounded-full" style={{ animation: 'indeterminate 1.5s ease-in-out infinite' }} />
                       </div>
-                      <p className="text-[10px] text-brand-600 font-semibold">Validating email...</p>
+                      <p className="text-[10px] text-brand-600 font-semibold">{messages.auth.validating?.email || 'Validating email...'}</p>
                     </div>
                   )}
                   {!emailChecking && accountData.email && !fieldErrors.email && !emailTaken && (
                     <div className="flex items-center gap-1.5">
                       <CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0" />
                       <span className="text-[10px] text-emerald-600 font-semibold">{messages.auth.success.emailAvailable}</span>
-                    </div>
-                  )}
-                  {!emailChecking && emailTaken && (
-                    <div className="flex items-center gap-1.5">
-                      <XCircle size={14} className="text-rose-500 flex-shrink-0" />
-                      <span className="text-[10px] text-rose-600 font-semibold">{messages.auth.errors.duplicateEmail}</span>
                     </div>
                   )}
                 </div>

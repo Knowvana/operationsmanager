@@ -8,12 +8,31 @@
 // Both have filtering, search, detail panel, real-time updates.
 // ============================================================================
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Logger, Card, Button, PageHeader } from '@shared';
+import { Logger, GlobalLogStore, Card, Button, PageHeader, ActionModal, ProgressModal } from '@shared';
 import {
   ScrollText, Search, Filter, Trash2, RefreshCw,
   X, Clock, Tag, Globe, User, CheckCircle2,
-  XCircle, ArrowRightLeft, ArrowUp, ArrowDown, GripVertical
+  XCircle, ArrowRightLeft, ArrowUp, ArrowDown, GripVertical,
+  Database, HardDrive, Settings, Save, Zap
 } from 'lucide-react';
+
+ function mergeLogsById(primary, secondary) {
+   const seen = new Set();
+   const merged = [];
+   for (const l of primary || []) {
+     if (!l?.id) continue;
+     if (seen.has(l.id)) continue;
+     seen.add(l.id);
+     merged.push(l);
+   }
+   for (const l of secondary || []) {
+     if (!l?.id) continue;
+     if (seen.has(l.id)) continue;
+     seen.add(l.id);
+     merged.push(l);
+   }
+   return merged;
+ }
 
 const LEVEL_CONFIG = {
   debug: { color: 'text-surface-400', bg: 'bg-surface-100', label: 'DEBUG' },
@@ -44,7 +63,7 @@ const SOURCE_TO_COMPONENT = {
   'Registration':                       'User Registration',
   'App':                                'Application Startup',
   'System':                             'System Auto Refresh',
-  'Firebase':                           'Firebase Connection',
+  'Database':                            'Database Connection',
   'PlatformService':                    'Platform Service Call',
   'UserService':                        'User Service Call',
   'Logger':                             'Logger Service',
@@ -69,6 +88,8 @@ function getSortValue(log, colId, tab) {
       case 'url': return log.url || '';
       case 'status': return log.statusCode || 0;
       case 'respTime': return log.durationMs || 0;
+      case 'reqBody': return log.requestPayload ? JSON.stringify(log.requestPayload).length : 0;
+      case 'respBody': return log.responsePayload ? JSON.stringify(log.responsePayload).length : 0;
       case 'timestamp': return log.timestamp || '';
       case 'user': return log.user || '';
       case 'result': return log.success ? 1 : 0;
@@ -90,11 +111,13 @@ const SYSTEM_COLUMNS = [
 
 const API_COLUMNS = [
   { id: 'method', label: 'Method', width: 75, minWidth: 50 },
-  { id: 'url', label: 'API URL', width: 0, minWidth: 120 },
+  { id: 'url', label: 'API URL', width: 0, minWidth: 150 },
   { id: 'status', label: 'Status', width: 70, minWidth: 50 },
-  { id: 'respTime', label: 'Resp Time', width: 95, minWidth: 60 },
+  { id: 'respTime', label: 'Response Time', width: 95, minWidth: 80 },
+  { id: 'reqBody', label: 'Request Body', width: 120, minWidth: 100 },
+  { id: 'respBody', label: 'Response Body', width: 120, minWidth: 100 },
   { id: 'timestamp', label: 'Timestamp', width: 95, minWidth: 70 },
-  { id: 'user', label: 'User', width: 120, minWidth: 70 },
+  { id: 'user', label: 'User', width: 100, minWidth: 70 },
   { id: 'result', label: 'Result', width: 65, minWidth: 50 },
 ];
 
@@ -102,12 +125,23 @@ export default function LogsViewer() {
   const [activeTab, setActiveTab] = useState('system');
   const [logs, setLogs] = useState([]);
   const [apiLogs, setApiLogs] = useState([]);
+  const [dbSystemLogs, setDbSystemLogs] = useState([]);
+  const [dbApiLogs, setDbApiLogs] = useState([]);
   const [searchText, setSearchText] = useState('');
   const [levelFilter, setLevelFilter] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [selectedLog, setSelectedLog] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshInterval, setRefreshInterval] = useState(60); // in seconds
+  const [isRefreshingLogs, setIsRefreshingLogs] = useState(false);
+  const [refreshLogsProgress, setRefreshLogsProgress] = useState(0);
+  const [refreshLogsMessage, setRefreshLogsMessage] = useState('');
+  const [isFlushing, setIsFlushing] = useState(false);
+  const [flushResult, setFlushResult] = useState(null); // { success, flushed } or { success: false, error }
+  const [showSettings, setShowSettings] = useState(false);
+  const [cacheStats, setCacheStats] = useState(GlobalLogStore.getStats());
+  const [settingsMaxCache, setSettingsMaxCache] = useState(GlobalLogStore.getConfig().maxCacheSize);
+  const autoRefreshTimerRef = useRef(null);
 
   // --- Interactive column state ---
   const [sysColOrder, setSysColOrder] = useState(SYSTEM_COLUMNS.map(c => c.id));
@@ -119,17 +153,119 @@ export default function LogsViewer() {
   const [dragOverCol, setDragOverCol] = useState(null);
   const resizeRef = useRef(null);
 
-  useEffect(() => {
-    const refresh = () => {
-      setLogs([...Logger.getSystemLogs()]);
-      setApiLogs([...Logger.getApiLogs()]);
-    };
-    refresh();
-    if (autoRefresh) {
-      const unsub = Logger.subscribe(refresh);
-      return unsub;
+  const syncFromMemory = useCallback(() => {
+    const memSystem = [...Logger.getSystemLogs()];
+    const memApi = [...Logger.getApiLogs()];
+    setLogs(mergeLogsById(memSystem, dbSystemLogs));
+    setApiLogs(mergeLogsById(memApi, dbApiLogs));
+    setCacheStats(GlobalLogStore.getStats());
+  }, [dbSystemLogs, dbApiLogs]);
+
+  const refreshLogsFromDatabase = useCallback(async () => {
+    setIsRefreshingLogs(true);
+    setRefreshLogsProgress(10);
+    setRefreshLogsMessage('Loading logs from database...');
+
+    try {
+      const { DatabaseService } = await import('@shared');
+      const client = DatabaseService.getClient();
+      if (!client) throw new Error('Database not configured');
+
+      setRefreshLogsProgress(35);
+      const { data, error } = await client
+        .from('logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(500);
+      if (error) throw error;
+      setRefreshLogsProgress(70);
+
+      const all = (data || []).map(row => ({
+        id: row.id,
+        timestamp: row.created_at,
+        level: row.level,
+        message: row.message,
+        type: row.type,
+        source: row.source,
+        user: row.user,
+        data: row.data,
+        sessionId: row.session_id,
+        result: row.result,
+        apiUrl: row.api_url,
+        method: row.api_method,
+        url: row.api_url,
+        statusCode: row.api_status_code,
+        durationMs: row.api_response_ms,
+        requestPayload: row.api_request,
+        responsePayload: row.api_response,
+      }));
+      const nextApi = [];
+      const nextSystem = [];
+
+      for (const entry of all) {
+        if (entry && entry.method && entry.url) nextApi.push(entry);
+        else nextSystem.push(entry);
+      }
+
+      setDbSystemLogs(nextSystem);
+      setDbApiLogs(nextApi);
+
+      setRefreshLogsProgress(95);
+      setRefreshLogsMessage('Merging logs...');
+    } catch (err) {
+      setFlushResult({ success: false, error: err.message });
+    } finally {
+      setRefreshLogsProgress(100);
+      setTimeout(() => {
+        setIsRefreshingLogs(false);
+        setRefreshLogsProgress(0);
+        setRefreshLogsMessage('');
+      }, 250);
     }
-  }, [autoRefresh]);
+  }, []);
+
+  // Subscribe to Logger for real-time updates
+  useEffect(() => {
+    syncFromMemory();
+    const unsub = Logger.subscribe(syncFromMemory);
+    return unsub;
+  }, [syncFromMemory]);
+
+  useEffect(() => {
+    // keep displayed logs merged after DB refresh
+    syncFromMemory();
+  }, [dbSystemLogs, dbApiLogs, syncFromMemory]);
+
+  // Auto-refresh timer (interval-based, separate from Logger subscribe)
+  useEffect(() => {
+    if (autoRefreshTimerRef.current) clearInterval(autoRefreshTimerRef.current);
+    if (autoRefresh && refreshInterval > 0) {
+      autoRefreshTimerRef.current = setInterval(refreshLogsFromDatabase, refreshInterval * 1000);
+    }
+    return () => { if (autoRefreshTimerRef.current) clearInterval(autoRefreshTimerRef.current); };
+  }, [autoRefresh, refreshInterval, refreshLogsFromDatabase]);
+
+  // Flush handler
+  const handleFlush = useCallback(async () => {
+    setIsFlushing(true);
+    setFlushResult(null);
+    try {
+      const result = await GlobalLogStore.flushToDatabase();
+      setFlushResult(result);
+      await refreshLogsFromDatabase();
+    } catch (err) {
+      setFlushResult({ success: false, error: err.message });
+    } finally {
+      setIsFlushing(false);
+    }
+  }, [refreshLogsFromDatabase]);
+
+  // Save settings handler
+  const handleSaveSettings = useCallback(() => {
+    GlobalLogStore.updateConfig({ maxCacheSize: settingsMaxCache });
+    setCacheStats(GlobalLogStore.getStats());
+    setShowSettings(false);
+  }, [settingsMaxCache]);
 
   const uniqueSources = useMemo(() => {
     const sources = new Set(logs.map((l) => l.source));
@@ -174,7 +310,6 @@ export default function LogsViewer() {
     setSelectedLog(null);
   }, [activeTab]);
 
-  const flushCount = Logger.getFlushBufferSize();
 
   // Current tab's column config
   const colDefs = activeTab === 'system' ? SYSTEM_COLUMNS : API_COLUMNS;
@@ -282,6 +417,18 @@ export default function LogsViewer() {
         }
         case 'respTime':
           return <span className="font-mono text-surface-500 text-xs">{log.durationMs}ms</span>;
+        case 'reqBody':
+          return log.requestPayload ? (
+            <span className="text-[10px] text-surface-500 font-mono truncate max-w-[100px]" title={JSON.stringify(log.requestPayload)}>
+              {JSON.stringify(log.requestPayload).substring(0, 30)}...
+            </span>
+          ) : <span className="text-surface-400 text-xs">—</span>;
+        case 'respBody':
+          return log.responsePayload ? (
+            <span className="text-[10px] text-surface-500 font-mono truncate max-w-[100px]" title={JSON.stringify(log.responsePayload)}>
+              {JSON.stringify(log.responsePayload).substring(0, 30)}...
+            </span>
+          ) : <span className="text-surface-400 text-xs">—</span>;
         case 'timestamp':
           return <span className="font-mono text-surface-400 text-xs">{log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : '—'}</span>;
         case 'user':
@@ -297,56 +444,41 @@ export default function LogsViewer() {
 
   return (
     <div className="animate-fade-in h-full flex flex-col">
-      <div className="flex items-center justify-between mb-4">
-        <PageHeader
-          title="Platform Admin - Logs"
-          subtitle={`${filteredLogs.length} entries`}
-          icon={ScrollText}
-        />
-        <Button variant="primary" size="xs" onClick={() => alert('Logs Settings - Coming Soon')}>
-          View Logs Settings
-        </Button>
-      </div>
+      <PageHeader title="Platform Admin - Logs" subtitle={`${filteredLogs.length} entries displayed`} icon={ScrollText} />
 
-      {/* Auto-save message and controls */}
-      <Card variant="flat" className="p-3 mb-4 flex-shrink-0">
-        <div className="flex items-center justify-between">
-          <div className="text-xs text-surface-600">
-            <span className="font-semibold">Logs are auto-saved to database every {Math.round(Logger.getConfig().flushIntervalSeconds / 60)} minute(s)</span>
-            <span className="text-surface-400 ml-2">({flushCount} - Logs in Memory Pending database flush)</span>
+      {/* Log Dashboard Stats & Controls */}
+      <div className="mb-4 flex-shrink-0">
+        <div className="flex items-stretch flex-wrap gap-2">
+          {/* DB Log Count */}
+          <div className="px-3 py-2 rounded-lg bg-gradient-to-br from-violet-50 to-violet-100 border border-violet-200 flex items-center gap-2 min-w-[140px]">
+            <div className="p-1.5 rounded bg-violet-500 bg-opacity-10"><Database size={14} className="text-violet-600" /></div>
+            <div className="min-w-0">
+              <p className="text-[9px] uppercase font-bold tracking-wider text-violet-600">In Database</p>
+              <p className="text-sm font-extrabold text-violet-900">{cacheStats.dbLogCount.toLocaleString()}</p>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" size="xs" onClick={() => alert('Update Settings - Coming Soon')}>
-              Update Setting
-            </Button>
-            <Button variant="ghost" size="xs" onClick={() => Logger.flushToDatabase()}>
-              Flush Now
-            </Button>
-          </div>
-        </div>
-      </Card>
 
-      {/* Auto-refresh controls */}
-      <Card variant="flat" className="p-3 mb-4 flex-shrink-0">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-3">
+          {/* Cache Log Count */}
+          <div className="px-3 py-2 rounded-lg bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 flex items-center gap-2 min-w-[170px]">
+            <div className="p-1.5 rounded bg-blue-500 bg-opacity-10"><HardDrive size={14} className="text-blue-600" /></div>
+            <div className="min-w-0">
+              <p className="text-[9px] uppercase font-bold tracking-wider text-blue-600">In App Cache</p>
+              <p className="text-sm font-extrabold text-blue-900">{cacheStats.cacheTotal.toLocaleString()}<span className="text-xs font-normal text-blue-600 ml-1">/{cacheStats.maxCacheSize}</span></p>
+            </div>
+          </div>
+
+          {/* Auto-refresh inline */}
+          <div className="px-3 py-2 rounded-lg bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 flex items-center gap-3 min-w-[330px]">
             <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={autoRefresh}
-                onChange={(e) => setAutoRefresh(e.target.checked)}
-                className="w-4 h-4 rounded border-surface-300 text-brand-600 focus:ring-2 focus:ring-brand-200"
-              />
-              <span className="text-xs font-semibold text-surface-600">Auto Refresh</span>
+              <div className={`relative w-9 h-5 rounded-full transition-colors ${autoRefresh ? 'bg-brand-500' : 'bg-surface-300'}`} onClick={() => setAutoRefresh(!autoRefresh)}>
+                <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${autoRefresh ? 'translate-x-4' : 'translate-x-0.5'}`} />
+              </div>
+              <span className="text-xs font-semibold text-surface-600">Auto refresh</span>
             </label>
             {autoRefresh && (
               <div className="flex items-center gap-2">
-                <label className="text-xs text-surface-500">Every</label>
-                <select
-                  value={refreshInterval}
-                  onChange={(e) => setRefreshInterval(parseInt(e.target.value))}
-                  className="px-2 py-1 text-xs border border-surface-200 rounded bg-white focus:outline-none focus:ring-2 focus:ring-brand-200"
-                >
+                <span className="text-xs text-surface-500">every</span>
+                <select value={refreshInterval} onChange={(e) => setRefreshInterval(parseInt(e.target.value))} className="px-2 py-1 text-xs border border-surface-200 rounded bg-white focus:outline-none focus:ring-2 focus:ring-brand-200">
                   <option value={10}>10s</option>
                   <option value={30}>30s</option>
                   <option value={60}>60s</option>
@@ -355,9 +487,77 @@ export default function LogsViewer() {
                 </select>
               </div>
             )}
+            <span className="text-[10px] text-surface-600 font-semibold">Auto-flush at {cacheStats.flushThreshold.toLocaleString()}</span>
+          </div>
+
+          {/* Actions */}
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<RefreshCw size={14} />}
+            onClick={refreshLogsFromDatabase}
+            disabled={isRefreshingLogs}
+            className="min-w-[110px]"
+          >
+            Refresh
+          </Button>
+
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<Zap size={14} />}
+            onClick={handleFlush}
+            disabled={isFlushing || cacheStats.cacheTotal === 0}
+            className="min-w-[90px]"
+          >
+            {isFlushing ? 'Flushing...' : 'Flush'}
+          </Button>
+
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<Settings size={14} />}
+            onClick={() => setShowSettings(true)}
+            className="min-w-[110px] ml-auto"
+          >
+            Log Settings
+          </Button>
+        </div>
+
+        {/* Flush result feedback */}
+        {flushResult && (
+          <div className={`flex items-center gap-2 p-2 rounded-lg text-xs font-semibold ${flushResult.success ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+            {flushResult.success ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
+            {flushResult.success ? `Successfully flushed ${flushResult.flushed} log entries to database.` : `Flush failed: ${flushResult.error || flushResult.reason}`}
+            <button onClick={() => setFlushResult(null)} className="ml-auto"><X size={12} /></button>
+          </div>
+        )}
+      </div>
+
+      {/* Log Settings Modal */}
+      <ActionModal isOpen={showSettings} onClose={() => setShowSettings(false)} title="Log Configuration" icon={Settings} size="sm" variant="form" confirmLabel="Save" onConfirm={handleSaveSettings}>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-surface-600 mb-1">Max Cache Size (entries)</label>
+            <input type="number" value={settingsMaxCache} onChange={(e) => setSettingsMaxCache(Math.max(100, parseInt(e.target.value) || 100))} min={100} max={50000} step={100} className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-200" />
+            <p className="text-[10px] text-surface-400 mt-1">Logs auto-flush to database when cache reaches 90% of this value. Range: 100 - 50,000.</p>
+          </div>
+          <div className="p-3 rounded-lg bg-surface-50 border border-surface-100 text-xs text-surface-500">
+            <p><strong>Current:</strong> {cacheStats.cacheTotal} entries in cache, {cacheStats.dbLogCount} in database</p>
+            <p><strong>Auto-flush at:</strong> {Math.floor(settingsMaxCache * 0.9)} entries</p>
           </div>
         </div>
-      </Card>
+      </ActionModal>
+
+      <ProgressModal
+        isOpen={isRefreshingLogs}
+        title="Refreshing Logs"
+        message={refreshLogsMessage || 'Loading logs from database...'}
+        progress={refreshLogsProgress}
+      />
+
+      {/* Flush Progress Modal */}
+      <ProgressModal isOpen={isFlushing} title="Flushing Logs..." message="Writing log entries to database..." progress={50} />
 
       {/* Tab Switcher + Toolbar */}
       <Card variant="flat" className="p-3 mb-4 flex-shrink-0">

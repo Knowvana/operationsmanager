@@ -21,7 +21,7 @@
 // Sign In is shown as a MODAL over the HomePage (not a separate page).
 // ============================================================================
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
-import { Layers } from 'lucide-react';
+import { Layers, Shield } from 'lucide-react';
 import { Logger, PlatformService, ActionModal, LoginForm } from '@shared';
 import SystemAdminLogin from './auth/SystemAdminLogin';
 import PlatformDashboard from './PlatformDashboard';
@@ -120,15 +120,35 @@ export default function App() {
 
   // Gate 1: Not authenticated → Show HomePage with modals
   if (!user) {
-    // Admin setup route always shows admin login (full page)
+    // Admin setup route: PlatformDashboard as background + admin login modal
     if (isAdminSetupRoute) {
       return (
-        <SystemAdminLogin
-          appName={appConfig.appName}
-          onLogin={handleLogin}
-          isDatabaseReady={isDatabaseReady}
-          onDatabaseReady={handleDatabaseReady}
-        />
+        <>
+          <div className="pointer-events-none select-none opacity-40 filter blur-[1px]">
+            <PlatformDashboard
+              user={{ email: 'guest', displayName: 'Guest', role: 'system_admin', isSystemAdmin: true }}
+              onLogout={() => {}}
+              appName={appConfig.appName}
+              isDatabaseReady={isDatabaseReady}
+              onDatabaseReady={() => {}}
+            />
+          </div>
+          <ActionModal
+            isOpen={true}
+            title="Admin Sign In"
+            subtitle="System Administration"
+            icon={Shield}
+            size="sm"
+            variant="custom"
+          >
+            <SystemAdminLogin onLogin={handleLogin} appName={appConfig.appName} embedded />
+          </ActionModal>
+          <UserRegistrationWizard
+            isOpen={showRegistration}
+            onClose={() => setShowRegistration(false)}
+            onComplete={handleRegistrationComplete}
+          />
+        </>
       );
     }
 

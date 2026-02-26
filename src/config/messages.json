@@ -37,6 +37,9 @@
       "registrationCompleteMessage": "Your account and organization have been created successfully. You can now log in to access your dashboard.",
       "loginRedirect": "Login & Go to Dashboard",
       "emailAvailable": "Email is available."
+    },
+    "validating": {
+      "email": "Validating email..."
     }
   },
 
@@ -128,9 +131,9 @@
       "degraded": "Degraded",
       "checking": "Checking…",
       "allServicesRunning": "All services running",
-      "firebaseConnectedDbNeeds": "Firebase connected · DB needs setup",
-      "cannotReachFirebase": "Cannot reach Firebase",
-      "connectingToFirebase": "Connecting to Firebase…"
+      "dbConnectedNeedsSetup": "Database connected · needs setup",
+      "cannotReachDatabase": "Cannot reach database",
+      "connectingToDatabase": "Connecting to database…"
     },
     "tenantAdmin": {
       "title": "Dashboard",
@@ -164,7 +167,7 @@
       "adminSchema": "System Admin Schema Initialized"
     },
     "labels": {
-      "provider": "Firebase Firestore",
+      "provider": "Supabase PostgreSQL",
       "connected": "Connected",
       "notConnected": "Not Connected",
       "databaseType": "Database Type"
@@ -176,7 +179,7 @@
     "subtitle": "Global configuration — App Admin only",
     "database": {
       "title": "Database Configuration",
-      "description": "Manage your Firebase Firestore connection and database structure.",
+      "description": "Manage your PostgreSQL database connection and schema.",
       "connectionStatus": "Connection Status",
       "databaseConfig": "Database Configuration",
       "collections": "Collections",
@@ -235,6 +238,65 @@
     "title": "Coming Soon",
     "subtitle": "We're building something amazing for you. Your licensed modules will appear here shortly.",
     "description": "Our team is working hard to deliver powerful operations management tools."
+  },
+
+  "platformAdmin": {
+    "logs": {
+      "title": "Platform Admin - Logs",
+      "inDatabase": "In Database",
+      "inAppCache": "In App Cache",
+      "flushToDatabase": "Flush to Database",
+      "flushing": "Flushing...",
+      "flushingLogs": "Flushing Logs...",
+      "flushingMessage": "Writing log entries to database...",
+      "flushSuccess": "Successfully flushed {count} log entries to database.",
+      "flushFailed": "Flush failed: {error}",
+      "logSettings": "Log Settings",
+      "logConfiguration": "Log Configuration",
+      "maxCacheSize": "Max Cache Size (entries)",
+      "maxCacheSizeHelp": "Logs auto-flush to database when cache reaches 90% of this value. Range: 100 - 50,000.",
+      "autoRefresh": "Auto Refresh",
+      "autoFlushNote": "Cache auto-flushes at {threshold} entries"
+    },
+    "users": {
+      "title": "Platform Admin - Users",
+      "subtitle": "Manage all platform users and access",
+      "adminUsers": "Admin Users",
+      "tenantUsers": "Tenant Users",
+      "deleteTitle": "Delete User",
+      "deleteConfirm": "Are you sure you want to delete {name}? This action cannot be undone.",
+      "viewOnly": "View Only",
+      "noUsersFound": "No users found",
+      "noAdminUsers": "System admin accounts appear here",
+      "noTenantUsers": "Create a user to get started",
+      "searchAdjust": "Try adjusting your search terms"
+    },
+    "tenants": {
+      "title": "Tenant Management",
+      "subtitle": "Manage organizations and subscriptions",
+      "allTenants": "All Tenants",
+      "dbNotInitialized": "Database not initialized",
+      "dbNotInitializedDesc": "Please run the Database Setup Wizard before managing tenants.",
+      "deleteConfirm": "Are you sure you want to delete {name}?",
+      "deleteWarning": "This action cannot be undone. All tenant data, users, and module subscriptions will be permanently removed.",
+      "noTenantsFound": "No tenants found",
+      "createFirst": "Create your first tenant to get started",
+      "searchAdjust": "Try adjusting your search terms"
+    },
+    "defaultObjects": {
+      "title": "Default Database Objects",
+      "initialized": "Initialized",
+      "notCreated": "Not Created",
+      "description": "Tenants, Users, Logs, Admin Users",
+      "createButton": "Create",
+      "deleteButton": "Delete Default Data Objects",
+      "deleteTitle": "Delete Default Data Objects",
+      "deleteConfirm": "Are you sure you want to delete all default database objects? This will remove the default system admin, tenant, and logs. This action cannot be undone.",
+      "creating": "Creating...",
+      "deleting": "Deleting...",
+      "creatingMessage": "Initializing default database objects...",
+      "deletingMessage": "Removing default database objects..."
+    }
   },
 
   "common": {

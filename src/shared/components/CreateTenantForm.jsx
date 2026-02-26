@@ -1,5 +1,5 @@
 // ============================================================================
-// CreateTenantForm — Reusable tenant creation/edit form.
+// TenantForm — Reusable tenant creation/edit form.
 //
 // ARCHITECTURE NOTE:
 // Used in TWO contexts:
@@ -14,7 +14,7 @@
 // The parent controls the modal, loading state, and persistence.
 //
 // Usage:
-//   <CreateTenantForm
+//   <TenantForm
 //     mode="admin"
 //     initialData={existingTenant}
 //     onSubmit={handleSave}
